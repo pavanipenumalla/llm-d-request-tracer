@@ -1,0 +1,23 @@
+# Example EndpointPickerConfig enabling the request-tracer alongside a typical
+# routing plugin set. The tracer is a top-level plugin (no schedulingProfile
+# reference needed) -- the director invokes it for every request.
+apiVersion: llm-d.ai/v1alpha1
+kind: EndpointPickerConfig
+plugins:
+  - type: request-tracer
+    parameters:
+      sink: file
+      filePath: /var/log/epp/traces.jsonl
+      bufferSize: 4096
+      staleTraceTtlSeconds: 300
+      sweepSeconds: 60
+  # Example routing plugins whose signals the tracer will capture per candidate.
+  - type: prefix-cache-affinity-filter
+  - type: token-load-scorer
+  - type: inflight-load-producer
+  - type: approx-prefix-cache-producer
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: prefix-cache-affinity-filter
+      - pluginRef: token-load-scorer

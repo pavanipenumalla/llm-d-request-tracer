@@ -1,0 +1,6 @@
+# Local-only dev artifacts
+*.bak
+traces.jsonl
+/bin/
+# Built EPP binary from `go build -o epp-with-tracer ./cmd/epp-with-tracer`
+/epp-with-tracer

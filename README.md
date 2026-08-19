@@ -110,6 +110,34 @@ and one import. Nothing else changes.
 The plugin is registered at `Beta` stability, so you do **not** need the
 `--allow-experimental-plugins` flag to enable it.
 
+## Build a container image (for running in a cluster)
+
+To run in Kubernetes you need a container image. This repo's `Dockerfile` mirrors
+upstream's `Dockerfile.epp` and builds `cmd/epp-with-tracer` into a distroless
+image that is a drop-in replacement for the stock EPP image (same ports, same
+`/app/epp` entrypoint, nonroot). The `Makefile` wraps it:
+
+```bash
+# Build. Point it at your registry/name/tag. Set TARGETARCH to your CLUSTER's
+# arch (amd64 for most GPU clusters; defaults to your host arch otherwise).
+make image-build \
+  IMAGE_REGISTRY=quay.io/you \
+  IMAGE_NAME=llm-d-router \
+  IMAGE_TAG=tracer \
+  TARGETARCH=amd64
+
+# Push (docker login first).
+make image-push \
+  IMAGE_REGISTRY=quay.io/you IMAGE_NAME=llm-d-router IMAGE_TAG=tracer
+```
+
+That produces `quay.io/you/llm-d-router:tracer`. In your EPP Deployment, swap the
+EPP container image for this one and keep everything else (args, ports, mounts)
+the same -- then enable the plugin in the config as below.
+
+To build the image against a fork or local router checkout, add a `replace` to
+`go.mod` first (see "Match it to your router version or fork").
+
 ## Configure -- enable the tracer in your EPP config
 
 Whichever binary you built, the tracer does nothing until you list it in the

@@ -181,6 +181,31 @@ kubectl cp <epp-namespace>/<epp-pod>:/var/log/epp/traces.jsonl ./traces.jsonl
 Every field and where it comes from is documented in
 [`docs/data-dictionary.md`](docs/data-dictionary.md).
 
+## Visualize the output
+
+[`visualizer.html`](visualizer.html) is a self-contained, dependency-free page
+for exploring a `traces.jsonl`. Open it in any browser and drag the file onto the
+page (or click "Load traces"); everything is parsed and rendered locally, nothing
+leaves the browser. It works from `file://` -- no server needed.
+
+Three tabs plus a click-through decision panel:
+
+- **Overview** -- pool-wide tiles (requests, sessions, pods, avg/p95 TTFT and
+  end-to-end, tokens), requests-per-pod, a score-vs-placement summary (how often
+  the chosen winner was the top-scored candidate), and a session table.
+- **Session** -- one `fairnessID`: per-turn latency and token charts, a per-pod
+  distribution (offered-as-candidate vs actually chosen), and a **Gantt
+  timeline** of every turn over wall-clock (wait/TTFT vs decode, colored by pod,
+  zoomable).
+- **Requests** -- a flat, sortable table of every request across all sessions,
+  for finding outliers by TTFT, end-to-end, or score gap.
+
+Clicking any turn (table row or Gantt bar) opens the **decision panel**: the
+timing breakdown plus every candidate pod ranked by `finalScore` with its
+gap-to-winner, KV/queue/in-flight/prefix state at decision time, and a per-
+candidate expander that dumps the full raw attribute bag with each value's
+`read`/`derived` provenance badge.
+
 ## Match it to your router version or fork
 
 This module pins upstream `github.com/llm-d/llm-d-router v0.10.0` in its `go.mod`.

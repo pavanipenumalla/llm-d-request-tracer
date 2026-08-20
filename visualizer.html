@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Request Tracer Visualizer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;
+    --series-2: #1baf7a;
+    --series-3: #eda100;
+    --series-4: #008300;
+    --series-5: #4a3aa7;
+    --series-6: #e34948;
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --seq-100:#cde2fb; --seq-250:#86b6ef; --seq-400:#3987e5; --seq-550:#1c5cab; --seq-700:#0d366b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #199e70;
+      --series-3: #c98500;
+      --series-4: #008300;
+      --series-5: #9085e9;
+      --series-6: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    font-size: 14px; line-height: 1.4;
+  }
+  header.appbar {
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface-1);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header.appbar h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header.appbar .meta { color: var(--muted); font-size: 12px; }
+  .spacer { margin-left: auto; }
+  .btn {
+    padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 550;
+    border: 1px solid var(--border); background: var(--page); color: var(--text-primary);
+  }
+  .btn:hover { border-color: var(--series-1); }
+  .tabs { display: flex; gap: 4px; }
+  .tab { padding: 6px 14px; border-radius: 8px; cursor: pointer; font-weight: 550; color: var(--text-secondary); border: 1px solid transparent; }
+  .tab.active { background: var(--page); border-color: var(--border); color: var(--text-primary); }
+  .tab.disabled { opacity: .4; pointer-events: none; }
+
+  #dropzone {
+    position: fixed; inset: 0; background: color-mix(in srgb, var(--series-1) 8%, var(--page));
+    display: none; align-items: center; justify-content: center; z-index: 50;
+    border: 3px dashed var(--series-1); font-size: 18px; color: var(--series-1); font-weight: 600;
+  }
+  #dropzone.show { display: flex; }
+
+  .welcome { max-width: 640px; margin: 12vh auto; text-align: center; padding: 0 20px; }
+  .welcome h2 { font-weight: 650; }
+  .welcome p { color: var(--text-secondary); }
+  .uploadcard {
+    margin-top: 22px; border: 2px dashed var(--border); border-radius: 16px; padding: 36px 24px;
+    background: var(--surface-1); cursor: pointer;
+  }
+  .uploadcard:hover { border-color: var(--series-1); }
+  .uploadcard strong { color: var(--series-1); }
+  code { font-family: ui-monospace, monospace; background: var(--page); padding: 1px 5px; border-radius: 5px; }
+
+  .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 54px); }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } }
+
+  .rail { border-right: 1px solid var(--border); background: var(--surface-1); display: flex; flex-direction: column; min-height: 0; }
+  .filters { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .filters h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  input[type=search], select {
+    width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--page); color: var(--text-primary); font: inherit;
+  }
+  .allbtn { width: 100%; margin-top: 4px; }
+
+  .list-head { padding: 8px 16px; font-size: 11px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); display: flex; justify-content: space-between; }
+  .proglist { overflow-y: auto; flex: 1; min-height: 160px; }
+  .progrow { padding: 8px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+  .progrow:hover { background: var(--page); }
+  .progrow.sel { background: color-mix(in srgb, var(--series-1) 14%, var(--surface-1)); }
+  .progrow .pid { font-size: 12px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progrow .cnt { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); font-weight: 600; }
+  .progrow .bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+  .progrow .bar i { display: block; height: 100%; background: var(--series-1); border-radius: 2px; }
+
+  .main { overflow-y: auto; padding: 20px 24px; min-height: 0; }
+  .section { margin-bottom: 26px; }
+  .section > h2 { font-size: 12px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); margin: 0 0 12px; }
+  .section > h2 .light { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing:.04em; }
+  .tile .v { font-size: 24px; font-weight: 650; margin-top: 4px; }
+  .tile .sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  .tile.flag .v { color: var(--warning); }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+
+  table { border-collapse: collapse; width: 100%; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 8px 12px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing:.04em; color: var(--muted); font-weight: 600; background: var(--page); }
+  th.sortable { cursor: pointer; }
+  th.sortable:hover { color: var(--text-primary); }
+  tr:last-child td { border-bottom: none; }
+  td .podname, td.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .chip.chosen { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
+  .chip.served { background: color-mix(in srgb, var(--series-1) 22%, transparent); color: var(--series-1); }
+  .chip.warn { background: color-mix(in srgb, var(--warning) 26%, transparent); color: var(--warning); }
+  .chip.inc { background: color-mix(in srgb, var(--critical) 20%, transparent); color: var(--critical); }
+  .chip.derived { background: color-mix(in srgb, var(--series-5) 26%, transparent); color: var(--series-5); }
+  .chip.read { background: var(--grid); color: var(--text-secondary); }
+
+  .kvbar { position: relative; height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; min-width: 70px; display: inline-block; vertical-align: middle; }
+  .kvbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+
+  .reqwrap { max-height: 460px; overflow: auto; border-radius: 12px; border: 1px solid var(--border); }
+  .reqwrap table { border: none; border-radius: 0; }
+  .reqwrap thead th { position: sticky; top: 0; z-index: 1; }
+  .reqwrap tbody tr.req { cursor: pointer; }
+  .reqwrap tbody tr.req:hover { background: var(--page); }
+  .reqwrap tbody tr.req.sel { background: color-mix(in srgb, var(--series-1) 22%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--series-1); }
+
+  .tlbar-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .tlcontrols { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tlcontrols input[type=range] { width: 180px; accent-color: var(--series-1); }
+  .tlwrap { overflow: auto; max-height: 520px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); position: relative; }
+  .tlwrap svg { display: block; }
+  .tlbar rect.bar, .tlbar rect.wait, .tlbar rect.hit { cursor: pointer; }
+  .tlbar:hover rect.wait { opacity: .6; }
+  .tlbar rect.sel-ring { stroke: none; }
+  .tlbar.sel rect.sel-ring { stroke: var(--text-primary); stroke-width: 2; }
+
+  .reqpanel { margin-top: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; border-top: 3px solid var(--series-1); }
+  .reqdetail { padding: 16px 18px; }
+  .reqdetail .paneltop { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .reqdetail .paneltop .rid { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+  .reqdetail h4 { font-size: 11px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); margin: 16px 0 8px; }
+  .reqdetail .closebtn { margin-left: auto; }
+  .reqdetail tr.winnerpod td { background: color-mix(in srgb, var(--good) 12%, var(--surface-1)); }
+  .reqdetail tr.servedpod td { box-shadow: inset 3px 0 0 var(--series-1); }
+
+  /* proportional timing strip */
+  .strip { display: flex; width: 100%; height: 34px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .strip .seg { display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; white-space: nowrap; overflow: hidden; min-width: 0; }
+  .striplab { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--text-secondary); margin-top: 6px; }
+  .striplab span { display: inline-flex; align-items: center; gap: 5px; }
+
+  /* raw attribute expander */
+  .rawtoggle { cursor: pointer; color: var(--series-1); font-size: 11px; user-select: none; }
+  .rawbody { display: none; }
+  .rawbody.open { display: table-row; }
+  .rawbody td { background: var(--page); }
+  .rawtbl { border: 1px solid var(--border); border-radius: 8px; }
+  .rawtbl td, .rawtbl th { text-align: left; font-variant-numeric: normal; }
+  .rawtbl .rawval { font-family: ui-monospace, monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  svg text { font-family: system-ui, sans-serif; }
+
+  .linechart { width: 100%; }
+  .linechart .plotbox { position: absolute; }
+  .linechart .plotbox svg { display: block; overflow: visible; }
+  .linechart .ylabs { position: absolute; left: 0; top: 0; bottom: 0; }
+  .linechart .ylab { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .linechart .xlab { position: absolute; bottom: 2px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .linechart .xlab.xl1 { text-align: right; }
+  .charttip {
+    position: absolute; z-index: 5; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); min-width: 120px;
+  }
+  .charttip .tt-x { color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .charttip .tt-row { display: flex; align-items: center; gap: 6px; }
+  .charttip .tt-row b { margin-left: auto; font-variant-numeric: tabular-nums; padding-left: 12px; }
+  .charttip .tt-sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  .crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 13px; }
+  .crumbs a { color: var(--series-1); cursor: pointer; text-decoration: none; }
+  .crumbs .sep { color: var(--muted); }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <h1>Request Tracer Visualizer</h1>
+  <span class="meta" id="globalMeta"></span>
+  <div class="spacer"></div>
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab disabled" data-tab="session">Session</div>
+    <div class="tab" data-tab="requests">Requests</div>
+  </div>
+  <button class="btn" id="uploadBtn">Load traces…</button>
+  <input type="file" id="fileInput" accept=".jsonl,.json,.txt" style="display:none" />
+</header>
+
+<div id="dropzone">Drop a <code>traces.jsonl</code> file to load</div>
+
+<div id="welcome" class="welcome">
+  <h2>Load a traces file</h2>
+  <p>Drop or choose a <code>traces.jsonl</code> emitted by the <code>request-tracer</code> EPP plugin.
+     Everything is parsed and rendered locally in your browser; nothing leaves this page.</p>
+  <div class="uploadcard" id="uploadCard">
+    <div style="font-size:28px;margin-bottom:8px">&#8593;</div>
+    <div><strong>Choose a file</strong> or drop it anywhere on this page</div>
+    <div style="color:var(--muted);margin-top:6px;font-size:12px">.jsonl &mdash; one trace per line</div>
+  </div>
+</div>
+
+<div class="layout" id="app" style="display:none">
+  <aside class="rail">
+    <div class="filters">
+      <h2>Sessions</h2>
+      <div class="field"><input type="search" id="searchBox" placeholder="Search session id or pod…" /></div>
+      <div class="field">
+        <label>Sort by</label>
+        <select id="sortBy">
+          <option value="count">Turn count</option>
+          <option value="ttft">Avg TTFT</option>
+          <option value="e2e">Avg end-to-end</option>
+          <option value="out">Output tokens</option>
+          <option value="id">Session id</option>
+        </select>
+      </div>
+      <button class="btn allbtn" id="overviewBtn">Show overview</button>
+    </div>
+    <div class="list-head"><span>Sessions</span><span id="listCount"></span></div>
+    <div class="proglist" id="progList"></div>
+  </aside>
+
+  <main class="main" id="mainPane"></main>
+</div>
+
+<script>
+/* ============================ helpers ============================ */
+const POD_SHORT = p => { const m = String(p).match(/-([a-z0-9]{4,6})(-rank-\d+)$/i); return m ? m[1] + m[2] : String(p).split('/').pop(); };
+const fmtInt = n => n==null||isNaN(n) ? '—' : Math.round(n).toLocaleString();
+const fmtMs = n => n == null || isNaN(n) ? '—' : (n >= 1000 ? (n/1000).toFixed(2)+' s' : Math.round(n)+' ms');
+const fmtPct = n => n==null||isNaN(n) ? '—' : (n*100).toFixed(1) + '%';
+const mean = a => a.length ? a.reduce((s,x)=>s+x,0)/a.length : 0;
+const sum = a => a.reduce((s,x)=>s+x,0);
+function pctl(arr, p){ if(!arr.length) return 0; const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1, Math.floor(p/100*s.length))]; }
+const hms = ms => new Date(ms).toISOString().substr(11,8);
+const hmsMs = ms => new Date(ms).toISOString().substr(11,12);
+function podColorVar(i){ return i==null||i<0 ? 'var(--muted)' : `var(--series-${(i%6)+1})`; }
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// Parse an RFC3339 timestamp to epoch ms. Go's zero value ("0001-01-01T...")
+// and any pre-year-2 time means "missing" -> null, never a real time.
+function tms(s){
+  if(!s) return null;
+  const t = Date.parse(s);
+  if(isNaN(t)) return null;
+  if(t < Date.parse('0002-01-01T00:00:00Z')) return null;
+  return t;
+}
+
+/* ============================ state ============================ */
+let RECORDS = [];               // normalized traces
+let SESSIONS = new Map();       // fairnessID -> {id, records[], stats}
+let ALL_PODS = [], POD_INDEX = new Map();
+let SESS_ORDER = [];            // fairnessIDs in current sort/filter order
+let SEL_SESSION = null;         // currently open session id
+let SEL_REQ = null;             // selected record index within SHOWN (for gantt/table)
+let SHOWN = [];                 // records rendered in the active session's table/gantt
+let TL_ZOOM = 1, TL_BASE_PXPS = 1;
+const REQ_TABLE_CAP = 1000;     // flat Requests tab render cap
+
+// Derived per-record fields (nulls when a timestamp is missing).
+function derive(r){
+  const arr = tms(r.arrivalTime), disp = tms(r.dispatchTime), hdr = tms(r.headersTime);
+  const ft = tms(r.firstTokenTime), done = tms(r.completionTime);
+  r._arr=arr; r._disp=disp; r._hdr=hdr; r._ft=ft; r._done=done;
+  r._ttft = (arr!=null && ft!=null) ? ft-arr : null;
+  r._e2e  = (arr!=null && done!=null) ? done-arr : null;
+  r._decode = (ft!=null && done!=null) ? done-ft : null;
+  const cands = r.candidates || [];
+  // top-scored candidate (max finalScore) and served candidate
+  let top=null;
+  for(const c of cands){ if(top==null || c.finalScore>top.finalScore) top=c; }
+  r._topScore = top ? top.finalScore : null;
+  r._topPod = top ? top.pod : null;
+  const served = r.servedPod || r.winnerPod;
+  r._servedCand = cands.find(c=>c.pod===served) || null;
+  // winner != served, winner != top-score
+  r._mismatchServe = !!(r.winnerPod && served && r.winnerPod!==served);
+  r._mismatchTop = !!(r.winnerPod && r._topPod && r.winnerPod!==r._topPod);
+  // prefix hit ratio from served candidate typed fields
+  const sc=r._servedCand;
+  r._prefixHit = (sc && sc.prefixTotalBlocks) ? (sc.prefixMatchBlocks||0)/sc.prefixTotalBlocks : null;
+  r._in = r.usage ? r.usage.promptTokens : null;
+  r._out = r.usage ? r.usage.completionTokens : null;
+  r._cached = (sc && sc.prefixMatchBlocks!=null && sc.blockSizeTokens!=null)
+    ? sc.prefixMatchBlocks*sc.blockSizeTokens : null;
+  return r;
+}
+
+function buildSessions(){
+  SESSIONS = new Map();
+  const podset = new Set();
+  for(const r of RECORDS){
+    const id = r.fairnessID || '(none)';
+    if(!SESSIONS.has(id)) SESSIONS.set(id, {id, records:[]});
+    SESSIONS.get(id).records.push(r);
+    for(const c of (r.candidates||[])) podset.add(c.pod);
+    if(r.winnerPod) podset.add(r.winnerPod);
+    if(r.servedPod) podset.add(r.servedPod);
+  }
+  for(const s of SESSIONS.values()){
+    s.records.sort((a,b)=>(a._arr||0)-(b._arr||0));
+    s.stats = sessionStats(s.records);
+  }
+  ALL_PODS = [...podset].sort();
+  POD_INDEX = new Map(ALL_PODS.map((p,i)=>[p,i]));
+}
+
+function sessionStats(recs){
+  const ttft=recs.map(r=>r._ttft).filter(v=>v!=null);
+  const e2e=recs.map(r=>r._e2e).filter(v=>v!=null);
+  const dec=recs.map(r=>r._decode).filter(v=>v!=null);
+  const pods=new Set(); recs.forEach(r=>{ if(r.servedPod||r.winnerPod) pods.add(r.servedPod||r.winnerPod); });
+  const prefix=recs.map(r=>r._prefixHit).filter(v=>v!=null);
+  const firstTs=Math.min(...recs.map(r=>r._arr).filter(v=>v!=null));
+  const lastTs=Math.max(...recs.map(r=>r._done||r._arr).filter(v=>v!=null));
+  return {
+    count:recs.length,
+    ttftAvg:mean(ttft), ttftP95:pctl(ttft,95),
+    e2eAvg:mean(e2e), e2eP95:pctl(e2e,95),
+    decodeAvg:mean(dec),
+    inTot:sum(recs.map(r=>r._in||0)), outTot:sum(recs.map(r=>r._out||0)),
+    prefixAvg: prefix.length?mean(prefix):null,
+    pods, firstTs, lastTs,
+  };
+}
+
+/* ============================ charts (ported) ============================ */
+let CHART_SEQ=0;
+const CHART_REG=new Map();
+
+function niceTicks(min,max,n){
+  const span=max-min||1, raw=span/n, mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag, step=(norm<1.5?1:norm<3?2:norm<7?5:10)*mag;
+  const start=Math.ceil(min/step)*step, out=[];
+  for(let v=start; v<=max+step*0.001; v+=step) out.push(v);
+  return out;
+}
+
+function svgLine(series, opts={}){
+  series=series.filter(s=>s.points&&s.points.length);
+  const xs=[], ys=[];
+  series.forEach(s=>s.points.forEach(([x,y])=>{xs.push(x);ys.push(y);}));
+  if(!xs.length) return '<div class="empty">no data</div>';
+  const xmin=Math.min(...xs), xmax=Math.max(...xs);
+  const ymin=0, ymax=opts.ymax||Math.max(...ys)*1.12||1;
+
+  const H=opts.h||190;
+  const yfmt=opts.yfmt||(v=>fmtInt(v));
+  const yticks=(opts.ymax? [0,0.25,0.5,0.75,1].map(f=>ymin+(ymax-ymin)*f) : niceTicks(ymin,ymax,4)).filter(v=>v<=ymax+1e-9);
+  const maxLbl=Math.max(...yticks.map(v=>yfmt(v).length));
+  const padL=Math.max(40, 12+maxLbl*8), padR=14, padT=10, padB=22;
+  const sx=x=> (xmax===xmin?0:(x-xmin)/(xmax-xmin));
+  const sy=y=> 1-(ymax===ymin?0:(y-ymin)/(ymax-ymin));
+  const gridLines=yticks.map(v=>{ const yf=sy(v);
+    return `<line x1="0" x2="1000" y1="${(yf*1000).toFixed(1)}" y2="${(yf*1000).toFixed(1)}" stroke="var(--grid)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;}).join('');
+  const paths=series.map(s=>{
+    const d=s.points.map(([x,y],i)=>`${i?'L':'M'}${(sx(x)*1000).toFixed(2)},${(sy(y)*1000).toFixed(2)}`).join('');
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  const xf=opts.xfmt||(v=>v);
+
+  const id='chart'+(CHART_SEQ++);
+  CHART_REG.set(id,{series,xmin,xmax,ymin,ymax,padL,padR,padT,padB,H,xfmt:xf,yfmt,ptfmt:opts.ptfmt||yfmt,sx,sy});
+
+  const yLabels=yticks.map(v=>{ const topPx=padT+sy(v)*(H-padT-padB);
+    return `<div class="ylab" style="top:${topPx.toFixed(1)}px">${yfmt(v)}</div>`;}).join('');
+  return `<div class="linechart" data-chart="${id}" style="position:relative;height:${H}px">
+    <div class="ylabs" style="width:${padL}px">${yLabels}</div>
+    <div class="plotbox" style="left:${padL}px;right:${padR}px;top:${padT}px;bottom:${padB}px">
+      <svg viewBox="0 0 1000 1000" width="100%" height="100%" preserveAspectRatio="none"
+           onpointermove="chartHover(event,'${id}')" onpointerleave="chartLeave('${id}')">
+        ${gridLines}${paths}
+        <g class="cross" style="display:none">
+          <line class="cx" y1="0" y2="1000" stroke="var(--baseline)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        </g>
+      </svg>
+    </div>
+    <div class="xlab xl0" style="left:${padL}px">${xf(xmin)}</div>
+    <div class="xlab xl1" style="right:${padR}px">${xf(xmax)}</div>
+    <div class="charttip" style="display:none"></div>
+  </div>`;
+}
+
+function chartHover(ev,id){
+  const c=CHART_REG.get(id); if(!c) return;
+  const svg=ev.currentTarget;
+  const box=svg.getBoundingClientRect();
+  const frac=(ev.clientX-box.left)/box.width;
+  if(frac<0||frac>1){ chartLeave(id); return; }
+  const xval=c.xmin+(c.xmax-c.xmin)*frac;
+  const wrap=svg.closest('.linechart');
+  const vx=frac*1000;
+  const cross=svg.querySelector('.cross'); cross.style.display='';
+  cross.querySelector('.cx').setAttribute('x1',vx.toFixed(1)); cross.querySelector('.cx').setAttribute('x2',vx.toFixed(1));
+  cross.querySelectorAll('circle').forEach(n=>n.remove());
+  const rows=c.series.map(s=>{
+    let best=s.points[0], bd=Infinity;
+    for(const p of s.points){ const d=Math.abs(p[0]-xval); if(d<bd){bd=d;best=p;} }
+    const vy=c.sy(best[1])*1000;
+    const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx',vx.toFixed(1)); circle.setAttribute('cy',vy.toFixed(1)); circle.setAttribute('r',7);
+    circle.setAttribute('fill',s.color); circle.setAttribute('stroke','var(--surface-1)'); circle.setAttribute('stroke-width','3');
+    circle.setAttribute('vector-effect','non-scaling-stroke');
+    cross.appendChild(circle);
+    return {name:s.name,color:s.color,val:best[1],x:best[0]};
+  });
+  const tip=wrap.querySelector('.charttip');
+  tip.innerHTML=`<div class="tt-x">${c.xfmt(rows[0].x)}</div>`+rows.map(r=>
+    `<div class="tt-row"><span class="tt-sw" style="background:${r.color}"></span>${r.name}<b>${c.ptfmt(r.val)}</b></div>`).join('');
+  tip.style.display='block';
+  const wrapBox=wrap.getBoundingClientRect();
+  const cursorX=ev.clientX-wrapBox.left;
+  const left=Math.min(wrapBox.width-tip.offsetWidth-6, Math.max(4, cursorX+14));
+  tip.style.left=left+'px'; tip.style.top='4px';
+}
+function chartLeave(id){
+  const wrap=document.querySelector(`.linechart[data-chart="${id}"]`); if(!wrap) return;
+  const cross=wrap.querySelector('.cross'); if(cross){cross.style.display='none'; cross.querySelectorAll('circle').forEach(n=>n.remove());}
+  const tip=wrap.querySelector('.charttip'); if(tip) tip.style.display='none';
+}
+window.chartHover=chartHover; window.chartLeave=chartLeave;
+
+function svgBars(items, opts={}){
+  if(!items.length) return '<div class="empty">no data</div>';
+  const rowH=opts.rowH||26, W=1000, labW=opts.labW||160, valW=70;
+  const H=items.length*rowH, maxV=Math.max(1,...items.map(i=>i.value));
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">` +
+    items.map((it,i)=>{
+      const y=i*rowH, bw=Math.max(2,(W-labW-valW)*(it.value/maxV));
+      return `<text x="4" y="${y+rowH/2+5}" font-size="13" fill="var(--text-secondary)" font-family="ui-monospace,monospace">${esc(it.label)}</text>
+        <rect x="${labW}" y="${y+5}" width="${bw.toFixed(1)}" height="${rowH-10}" rx="3" fill="${it.color||'var(--series-1)'}"/>
+        <text x="${(labW+bw+8).toFixed(1)}" y="${y+rowH/2+5}" font-size="13" fill="var(--text-secondary)">${opts.vfmt?opts.vfmt(it.value):it.value}</text>`;
+    }).join('') + `</svg>`;
+}
+
+/* ---------- per-session request timeline (Gantt) ---------- */
+const TL={ rowH:18, labW:78, padT:22, padB:6, minBar:3 };
+
+function svgTimeline(recs){
+  const usable = recs.filter(r=>r._arr!=null);
+  if(!usable.length) return '<div class="empty">no requests with timing</div>';
+  const xmin=Math.min(...usable.map(r=>r._arr));
+  const xmax=Math.max(...usable.map(r=>r._done||r._ft||r._arr));
+  const spanSec=Math.max(0.001,(xmax-xmin)/1000);
+  const pxps=TL_BASE_PXPS*TL_ZOOM;
+  const plotW=Math.max(200, spanSec*pxps);
+  const W=TL.labW+plotW+8, H=TL.padT+recs.length*TL.rowH+TL.padB;
+  const sx=t=>TL.labW+(t-xmin)/1000*pxps;
+
+  const targetTicks=Math.max(2,Math.floor(plotW/90));
+  const step=niceTicks(0,spanSec,targetTicks);
+  const grid=step.map(s=>{ const x=TL.labW+s*pxps;
+    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${TL.padT}" y2="${H-TL.padB}" stroke="var(--grid)" stroke-width="1"/>
+            <text x="${x.toFixed(1)}" y="14" font-size="11" fill="var(--muted)" text-anchor="middle">${hms(xmin+s*1000)}</text>`;}).join('');
+
+  const bars=recs.map((r,i)=>{
+    const y=TL.padT+i*TL.rowH+2, h=TL.rowH-4;
+    const chosen=r.servedPod||r.winnerPod||'';
+    const col=podColorVar(POD_INDEX.get(chosen));
+    if(r._arr==null){
+      return `<g class="tlbar" data-req="${i}"><text x="${TL.labW-6}" y="${y+h/2+4}" font-size="10.5" fill="var(--muted)" text-anchor="end" font-family="ui-monospace,monospace">${esc((r.requestID||'').slice(0,8))}</text></g>`;
+    }
+    const x0=sx(r._arr);
+    const xft=r._ft!=null?sx(r._ft):x0;             // wait/TTFT ends at first token
+    const xEnd=r._done!=null?sx(r._done):xft;        // decode ends at completion (or ft if incomplete)
+    const full=Math.max(TL.minBar, xEnd-x0);
+    const waitW=Math.max(0, Math.min(full, xft-x0));
+    const decW=Math.max(0, full-waitW);
+    const label=(r.requestID||'').slice(0,8);
+    return `<g class="tlbar ${i===SEL_REQ?'sel':''}" data-req="${i}"
+              onclick="openPanel(${i})"
+              onpointerenter="tlHover(event,${i})" onpointerleave="tlLeave()">
+      <text x="${TL.labW-6}" y="${y+h/2+4}" font-size="10.5" fill="var(--muted)" text-anchor="end" font-family="ui-monospace,monospace">${esc(label)}</text>
+      <rect class="wait" x="${x0.toFixed(1)}" y="${y}" width="${waitW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}" opacity="0.45"/>
+      <rect class="bar" x="${(x0+waitW).toFixed(1)}" y="${y}" width="${decW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}"/>
+      ${r.incomplete?`<rect x="${(x0+full).toFixed(1)}" y="${y}" width="2" height="${h}" fill="var(--critical)"/>`:''}
+      <rect class="sel-ring" x="${(x0-1).toFixed(1)}" y="${y-1}" width="${(full+2).toFixed(1)}" height="${h+2}" rx="3" fill="none"/>
+      <rect class="hit" x="${x0.toFixed(1)}" y="${y-1}" width="${Math.max(full,6).toFixed(1)}" height="${h+2}" fill="transparent"/>
+    </g>`;
+  }).join('');
+
+  return `<div class="tlwrap" id="tlScroll">
+    <svg width="${W.toFixed(0)}" height="${H}">${grid}${bars}</svg>
+    <div class="charttip" id="tlTip" style="display:none;position:fixed"></div>
+  </div>`;
+}
+
+function renderTimeline(){
+  const host=document.getElementById('tlHost'); if(!host) return;
+  const prev=document.getElementById('tlScroll');
+  const ratio=prev && prev.scrollWidth ? prev.scrollLeft/prev.scrollWidth : 0;
+  host.innerHTML=svgTimeline(SHOWN);
+  const now=document.getElementById('tlScroll');
+  if(now) now.scrollLeft=ratio*now.scrollWidth;
+  const zl=document.getElementById('tlZoomVal'); if(zl) zl.textContent=TL_ZOOM.toFixed(2)+'x';
+}
+function setTlZoom(z){ TL_ZOOM=Math.max(0.05,Math.min(20,z)); renderTimeline(); }
+function tlZoomFit(){ TL_ZOOM=1; renderTimeline(); }
+function tlHover(ev,i){
+  const r=SHOWN[i]; const tip=document.getElementById('tlTip'); if(!tip) return;
+  const chosen=r.servedPod||r.winnerPod||'';
+  tip.innerHTML=`<div class="tt-x">${esc((r.requestID||'').slice(0,8))} &middot; ${r._arr!=null?hmsMs(r._arr):'—'}</div>
+    <div class="tt-row"><span class="tt-sw" style="background:${podColorVar(POD_INDEX.get(chosen))}"></span>${esc(POD_SHORT(chosen))}</div>
+    <div class="tt-row">TTFT<b>${fmtMs(r._ttft)}</b></div>
+    <div class="tt-row">decode<b>${fmtMs(r._decode)}</b></div>
+    <div class="tt-row">E2E<b>${fmtMs(r._e2e)}</b></div>
+    <div class="tt-row">tokens<b>${fmtInt(r._in)} in / ${fmtInt(r._out)} out</b></div>
+    ${r.incomplete?'<div class="tt-row"><span class="chip inc">incomplete</span></div>':''}`;
+  tip.style.display='block';
+  tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-8, ev.clientX+14)+'px';
+  tip.style.top=Math.min(window.innerHeight-tip.offsetHeight-8, ev.clientY+14)+'px';
+}
+function tlLeave(){ const tip=document.getElementById('tlTip'); if(tip) tip.style.display='none'; }
+window.setTlZoom=setTlZoom; window.tlZoomFit=tlZoomFit; window.tlHover=tlHover; window.tlLeave=tlLeave;
+
+/* ============================ overview ============================ */
+function renderOverview(){
+  setActiveTab('overview'); SEL_SESSION=null; renderList();
+  const el=document.getElementById('mainPane');
+  const recs=RECORDS;
+  const ttft=recs.map(r=>r._ttft).filter(v=>v!=null);
+  const e2e=recs.map(r=>r._e2e).filter(v=>v!=null);
+
+  const podReq=new Map(), podKvSum=new Map(), podKvN=new Map();
+  for(const r of recs){
+    const chosen=r.servedPod||r.winnerPod;
+    if(chosen) podReq.set(chosen,(podReq.get(chosen)||0)+1);
+    for(const c of (r.candidates||[])){
+      const kv=c.metrics && c.metrics.kvCacheUsagePercent;
+      if(kv!=null){ podKvSum.set(c.pod,(podKvSum.get(c.pod)||0)+kv); podKvN.set(c.pod,(podKvN.get(c.pod)||0)+1); }
+    }
+  }
+  // score-vs-placement: winner==top, tie (multiple share top score), overridden
+  let served_ne_winner=0, winner_eq_top=0, winner_ne_top=0, tie=0;
+  for(const r of recs){
+    if(r._mismatchServe) served_ne_winner++;
+    if(!r.candidates || !r.candidates.length) continue;
+    const topCount=r.candidates.filter(c=>Math.abs(c.finalScore-r._topScore)<1e-9).length;
+    if(topCount>1) tie++;
+    if(r._mismatchTop) winner_ne_top++; else winner_eq_top++;
+  }
+
+  const tile=(k,v,sub,flag)=>`<div class="tile${flag?' flag':''}"><div class="k">${k}</div><div class="v">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+  const podBars=ALL_PODS.map((p,i)=>({label:POD_SHORT(p), value:podReq.get(p)||0, color:podColorVar(i)}))
+    .filter(b=>b.value>0).sort((a,b)=>b.value-a.value);
+
+  const topSessions=[...SESSIONS.values()].sort((a,b)=>b.stats.count-a.stats.count).slice(0,20);
+  const sessRows=topSessions.map(s=>`
+    <tr style="cursor:pointer" onclick="selectSession('${esc(s.id)}')">
+      <td class="mono">${esc(s.id)}</td><td>${s.stats.count}</td>
+      <td>${fmtMs(s.stats.ttftAvg)}</td><td>${fmtMs(s.stats.e2eAvg)}</td>
+      <td>${fmtInt(s.stats.outTot)}</td><td>${s.stats.pods.size}</td>
+    </tr>`).join('');
+
+  el.innerHTML=`
+    <div class="crumbs"><b>Overview</b><span class="sep">&middot;</span><span style="color:var(--muted)">all sessions</span></div>
+    <div class="section">
+      <div class="tiles">
+        ${tile('Requests', fmtInt(recs.length))}
+        ${tile('Sessions', fmtInt(SESSIONS.size))}
+        ${tile('Pods', ALL_PODS.length)}
+        ${tile('Avg TTFT', fmtMs(mean(ttft)), 'p95 '+fmtMs(pctl(ttft,95)))}
+        ${tile('Avg end-to-end', fmtMs(mean(e2e)), 'p95 '+fmtMs(pctl(e2e,95)))}
+        ${tile('Input tokens', fmtInt(sum(recs.map(r=>r._in||0))))}
+        ${tile('Output tokens', fmtInt(sum(recs.map(r=>r._out||0))))}
+        ${tile('Served &ne; winner', fmtInt(served_ne_winner), 'served pod differs from winner', served_ne_winner>0)}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="section card">
+        <h2>Requests per pod <span class="light">(served)</span></h2>
+        ${svgBars(podBars, {rowH:26, labW:150, vfmt:fmtInt})}
+      </div>
+      <div class="section card">
+        <h2>Score vs placement</h2>
+        <table>
+          <tbody>
+            <tr><td>Winner = top-scored candidate</td><td>${fmtInt(winner_eq_top)}</td></tr>
+            <tr><td>Winner &ne; top-scored candidate</td><td>${fmtInt(winner_ne_top)}</td></tr>
+            <tr><td>Top score tied across candidates</td><td>${fmtInt(tie)}</td></tr>
+            <tr><td>Served pod &ne; winner pod</td><td>${fmtInt(served_ne_winner)}</td></tr>
+          </tbody>
+        </table>
+        <div class="sub" style="color:var(--muted);margin-top:8px;font-size:12px">
+          The winner is the pod the scheduler chose; the top-scored candidate is the highest <code>finalScore</code>.
+          They can differ when a downstream profile/filter overrides the score.
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <h2>Top sessions by turn count <span class="light">(click a row)</span></h2>
+      <table>
+        <thead><tr><th>Session</th><th>Turns</th><th>Avg TTFT</th><th>Avg E2E</th><th>Out tokens</th><th>Pods</th></tr></thead>
+        <tbody>${sessRows||'<tr><td colspan="6" class="empty">no sessions</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+/* ============================ session detail ============================ */
+function selectSession(id){
+  setActiveTab('session'); SEL_SESSION=id; renderList();
+  const s=SESSIONS.get(id); if(!s){ renderOverview(); return; }
+  const st=s.stats;
+  SHOWN=s.records; SEL_REQ=null;
+  const el=document.getElementById('mainPane');
+  const tile=(k,v,sub)=>`<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+
+  const order=s.records.map((r,i)=>[i,r]);
+  const ttftPts=order.filter(([i,r])=>r._ttft!=null).map(([i,r])=>[i,r._ttft]);
+  const e2ePts=order.filter(([i,r])=>r._e2e!=null).map(([i,r])=>[i,r._e2e]);
+  const inPts=order.filter(([i,r])=>r._in!=null).map(([i,r])=>[i,r._in]);
+  const outPts=order.filter(([i,r])=>r._out!=null).map(([i,r])=>[i,r._out]);
+
+  // per-pod: offered (candidate) vs chosen (served) + avg kv
+  const offered=new Map(), chosen=new Map(), kvSum=new Map(), kvN=new Map();
+  for(const r of s.records){
+    const seen=new Set();
+    for(const c of (r.candidates||[])){
+      if(!seen.has(c.pod)){ offered.set(c.pod,(offered.get(c.pod)||0)+1); seen.add(c.pod); }
+      const kv=c.metrics&&c.metrics.kvCacheUsagePercent;
+      if(kv!=null){ kvSum.set(c.pod,(kvSum.get(c.pod)||0)+kv); kvN.set(c.pod,(kvN.get(c.pod)||0)+1); }
+    }
+    const pod=r.servedPod||r.winnerPod;
+    if(pod) chosen.set(pod,(chosen.get(pod)||0)+1);
+  }
+  const podKeys=[...new Set([...offered.keys(),...chosen.keys()])].sort();
+  const podRows=podKeys.map(pod=>{
+    const i=POD_INDEX.get(pod), kv=kvN.get(pod)?kvSum.get(pod)/kvN.get(pod):null;
+    return `<tr>
+      <td><i class="swatch" style="background:${podColorVar(i)};margin-right:6px"></i><span class="podname">${esc(POD_SHORT(pod))}</span></td>
+      <td>${fmtInt(offered.get(pod)||0)}</td><td>${fmtInt(chosen.get(pod)||0)}</td>
+      <td>${kv==null?'—':`<span class="kvbar"><i style="width:${Math.min(100,kv*100).toFixed(1)}%;background:${kvColor(kv)}"></i></span> ${fmtPct(kv)}`}</td>
+    </tr>`;
+  }).join('');
+
+  const spanSec=Math.max(0.001,(st.lastTs-st.firstTs)/1000);
+  const fitW=(el.clientWidth||1100)-48-TL.labW;
+  TL_BASE_PXPS=Math.max(0.02, fitW/spanSec); TL_ZOOM=1;
+  const podLegend=podKeys.map(pod=>`<span><i class="swatch" style="background:${podColorVar(POD_INDEX.get(pod))}"></i>${esc(POD_SHORT(pod))}</span>`).join('');
+
+  el.innerHTML=`
+    <div class="crumbs"><a onclick="renderOverview()">Overview</a><span class="sep">/</span><b>Session</b></div>
+    <div class="section">
+      <div style="font-family:ui-monospace,monospace;font-size:13px;word-break:break-all">${esc(s.id)}</div>
+      <div class="sub" style="color:var(--muted);margin-top:4px">
+        ${esc(s.records[0].targetModel||'')} &middot; ${hms(st.firstTs)} &rarr; ${hms(st.lastTs)}
+      </div>
+    </div>
+    <div class="section">
+      <div class="tiles">
+        ${tile('Turns', fmtInt(st.count))}
+        ${tile('Avg TTFT', fmtMs(st.ttftAvg), 'p95 '+fmtMs(st.ttftP95))}
+        ${tile('Avg end-to-end', fmtMs(st.e2eAvg), 'p95 '+fmtMs(st.e2eP95))}
+        ${tile('Avg decode', fmtMs(st.decodeAvg), 'completion &minus; first token')}
+        ${tile('Input tokens', fmtInt(st.inTot))}
+        ${tile('Output tokens', fmtInt(st.outTot))}
+        ${tile('Prefix hit ratio', fmtPct(st.prefixAvg))}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="section card">
+        <h2>Latency per turn <span class="light">(over arrival order)</span></h2>
+        <div class="legend"><span><i class="swatch" style="background:var(--series-1)"></i>TTFT</span><span><i class="swatch" style="background:var(--series-6)"></i>end-to-end</span></div>
+        ${svgLine([{name:'ttft',color:'var(--series-1)',points:ttftPts},{name:'e2e',color:'var(--series-6)',points:e2ePts}], {h:170, xfmt:v=>'#'+Math.round(v), yfmt:v=>Math.round(v)+'ms'})}
+      </div>
+      <div class="section card">
+        <h2>Tokens per turn <span class="light">(over arrival order)</span></h2>
+        <div class="legend"><span><i class="swatch" style="background:var(--series-2)"></i>input</span><span><i class="swatch" style="background:var(--series-3)"></i>output</span></div>
+        ${svgLine([{name:'in',color:'var(--series-2)',points:inPts},{name:'out',color:'var(--series-3)',points:outPts}], {h:170, xfmt:v=>'#'+Math.round(v)})}
+      </div>
+    </div>
+    <div class="section">
+      <h2>Per-pod distribution <span class="light">(this session)</span></h2>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--series-2)"></i>offered = pod was a candidate for a turn</span>
+        <span><i class="swatch" style="background:var(--good)"></i>chosen = pod served a turn</span>
+      </div>
+      <table><thead><tr><th>Pod</th><th>Offered</th><th>Chosen</th><th>Avg KV @ dispatch</th></tr></thead><tbody>${podRows||'<tr><td colspan="4" class="empty">no candidates</td></tr>'}</tbody></table>
+    </div>
+    <div class="section">
+      <h2>Request timeline <span class="light">(each bar = one turn; light = wait/TTFT, solid = decode; red tick = incomplete)</span></h2>
+      <div class="tlcontrols">
+        <div class="legend" style="margin:0">
+          <span><i class="swatch" style="background:var(--muted);opacity:.45"></i>wait / TTFT</span>
+          <span><i class="swatch" style="background:var(--muted)"></i>decode</span>
+          ${podLegend}
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <button class="btn" onclick="tlZoomFit()">Fit</button>
+          <span class="light" style="font-size:11px">Zoom</span>
+          <input type="range" min="-2" max="3" step="0.05" value="0" oninput="setTlZoom(Math.pow(10,+this.value))" title="time-axis zoom" />
+          <b id="tlZoomVal" style="font-variant-numeric:tabular-nums;font-size:12px">1.00x</b>
+        </div>
+      </div>
+      <div id="tlHost"></div>
+    </div>
+    <div class="section">
+      <h2>Turns <span class="light">(click a row for the decision detail)</span></h2>
+      <div class="reqwrap"><table>${TURN_HEAD}<tbody id="turnBody">${s.records.map((_,i)=>turnRowHTML(i)).join('')}</tbody></table></div>
+    </div>
+    <div id="reqPanel" class="reqpanel" style="display:none"></div>`;
+
+  renderTimeline();
+}
+
+const TURN_HEAD=`<thead><tr><th>Arrival</th><th>Req id</th><th>In</th><th>Out</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Cands</th><th>Chosen pod</th><th></th></tr></thead>`;
+function turnRowHTML(i){
+  const r=SHOWN[i];
+  const chosen=r.servedPod||r.winnerPod||'';
+  const dot=`<i class="tlbar-dot" style="background:${podColorVar(POD_INDEX.get(chosen))}"></i>`;
+  const flags=(r.incomplete?'<span class="chip inc">inc</span> ':'')+(r._mismatchTop?'<span class="chip warn">not top</span>':'');
+  return `<tr class="req ${i===SEL_REQ?'sel':''}" data-req="${i}" onclick="openPanel(${i})">
+    <td class="mono">${r._arr!=null?hmsMs(r._arr):'—'}</td>
+    <td class="mono">${esc((r.requestID||'').slice(0,8))}</td>
+    <td>${fmtInt(r._in)}</td><td>${fmtInt(r._out)}</td>
+    <td>${fmtPct(r._prefixHit)}</td><td>${fmtMs(r._ttft)}</td><td>${fmtMs(r._e2e)}</td>
+    <td>${(r.candidates||[]).length}</td>
+    <td>${dot}<span class="podname">${esc(POD_SHORT(chosen))}</span></td>
+    <td>${flags}</td></tr>`;
+}
+function kvColor(u){ if(u<0.15)return'var(--seq-100)'; if(u<0.35)return'var(--seq-250)'; if(u<0.6)return'var(--seq-400)'; if(u<0.85)return'var(--seq-550)'; return'var(--seq-700)'; }
+
+/* ============================ decision panel ============================ */
+let RAW_SEQ=0;
+function openPanel(i){
+  SEL_REQ=i;
+  document.querySelectorAll('tr.req.sel, .tlbar.sel').forEach(t=>t.classList.remove('sel'));
+  document.querySelectorAll(`tr.req[data-req="${i}"], .tlbar[data-req="${i}"]`).forEach(t=>t.classList.add('sel'));
+  const panel=document.getElementById('reqPanel'); if(!panel) return;
+  panel.innerHTML=decisionHTML(SHOWN[i]);
+  panel.style.display='';
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+window.openPanel=openPanel;
+function closePanel(){ const p=document.getElementById('reqPanel'); if(p) p.style.display='none'; SEL_REQ=null;
+  document.querySelectorAll('tr.req.sel, .tlbar.sel').forEach(t=>t.classList.remove('sel')); }
+window.closePanel=closePanel;
+
+function timingStrip(r){
+  const segs=[];
+  if(r._arr!=null && r._disp!=null) segs.push(['dispatch (EPP)', r._disp-r._arr, 'var(--series-5)']);
+  if(r._disp!=null && r._hdr!=null) segs.push(['to headers', r._hdr-r._disp, 'var(--series-3)']);
+  if(r._hdr!=null && r._ft!=null) segs.push(['to first token', r._ft-r._hdr, 'var(--series-1)']);
+  if(r._ft!=null && r._done!=null) segs.push(['decode', r._done-r._ft, 'var(--series-2)']);
+  const tot=sum(segs.map(s=>s[1]))||1;
+  const bar=segs.map(([lab,ms,col])=>`<div class="seg" style="flex:${Math.max(0.001,ms)};background:${col}" title="${lab}: ${fmtMs(ms)}">${(ms/tot>0.08)?fmtMs(ms):''}</div>`).join('');
+  const lab=segs.map(([lab,ms,col])=>`<span><i class="swatch" style="background:${col}"></i>${lab} ${fmtMs(ms)}</span>`).join('');
+  return `<div class="strip">${bar||'<div class="seg" style="flex:1;background:var(--muted)">no timing</div>'}</div><div class="striplab">${lab}</div>`;
+}
+
+function decisionHTML(r){
+  const winnerScore=r.winnerPod ? (r.candidates||[]).find(c=>c.pod===r.winnerPod)?.finalScore : r._topScore;
+  const cands=[...(r.candidates||[])].sort((a,b)=>b.finalScore-a.finalScore);
+  const rows=cands.map((c,ci)=>{
+    const m=c.metrics||{};
+    const gap=(winnerScore!=null)?winnerScore-c.finalScore:null;
+    const isWin=c.pod===r.winnerPod, isServed=c.pod===(r.servedPod||r.winnerPod);
+    const flags=[
+      c.isWinner||isWin?'<span class="chip chosen">winner</span>':'',
+      isServed&&!isWin?'<span class="chip served">served</span>':'',
+      (isWin&&r._mismatchServe)?'<span class="chip warn">not served</span>':'',
+    ].filter(Boolean).join(' ');
+    const prefix=(c.prefixTotalBlocks)?`${c.prefixMatchBlocks||0}/${c.prefixTotalBlocks} (${fmtPct((c.prefixMatchBlocks||0)/c.prefixTotalBlocks)})`:'—';
+    const rid='raw'+(RAW_SEQ++);
+    const attrKeys=Object.keys(c.attributes||{});
+    const rawRows=attrKeys.map(k=>{
+      const src=(c.attrSource||{})[k]||'read';
+      return `<tr><td class="mono" style="font-size:11px">${esc(k)}</td>
+        <td><span class="chip ${src==='derived'?'derived':'read'}">${esc(src)}</span></td>
+        <td class="rawval">${esc(JSON.stringify(c.attributes[k]))}</td></tr>`;
+    }).join('');
+    const rowCls=(isWin?'winnerpod ':'')+(isServed?'servedpod':'');
+    return `<tr class="${rowCls}">
+        <td><i class="swatch" style="background:${podColorVar(POD_INDEX.get(c.pod))};margin-right:6px"></i><span class="podname">${esc(POD_SHORT(c.pod))}</span> ${flags}</td>
+        <td>${c.finalScore.toFixed(4)}</td>
+        <td>${gap==null?'—':(gap===0?'&mdash;':'-'+gap.toFixed(4))}</td>
+        <td>${fmtInt(m.runningRequestsSize)}</td>
+        <td>${fmtInt(m.waitingQueueSize)}</td>
+        <td>${m.kvCacheUsagePercent!=null?fmtPct(m.kvCacheUsagePercent):'—'}</td>
+        <td>${fmtInt(c.inFlightTokens)}</td>
+        <td>${fmtInt(c.uncachedRequestTokens)}</td>
+        <td>${prefix}</td>
+        <td>${attrKeys.length?`<span class="rawtoggle" onclick="document.getElementById('${rid}').classList.toggle('open')">raw (${attrKeys.length})</span>`:'—'}</td>
+      </tr>
+      <tr class="rawbody" id="${rid}"><td colspan="10">
+        <table class="rawtbl"><thead><tr><th>attribute key</th><th>source</th><th>value</th></tr></thead><tbody>${rawRows}</tbody></table>
+      </td></tr>`;
+  }).join('');
+
+  const u=r.usage||{};
+  return `<div class="reqdetail">
+    <div class="paneltop">
+      <span class="rid">${esc(r.requestID||'')}</span>
+      ${r.incomplete?'<span class="chip inc">incomplete</span>':''}
+      ${r.responseStatus?`<span class="chip read">status ${esc(r.responseStatus)}</span>`:''}
+      <button class="btn closebtn" onclick="closePanel()">Close</button>
+    </div>
+    <h4>Timings</h4>
+    ${timingStrip(r)}
+    <div class="kv" style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 20px">
+      <div><span style="color:var(--muted)">totalEppMs</span><b>${r.totalEppMs!=null?r.totalEppMs+' ms':'—'}</b></div>
+      <div><span style="color:var(--muted)">TTFT</span><b>${fmtMs(r._ttft)}</b></div>
+      <div><span style="color:var(--muted)">E2E</span><b>${fmtMs(r._e2e)}</b></div>
+      <div><span style="color:var(--muted)">tokens</span><b>${fmtInt(u.promptTokens)} in / ${fmtInt(u.completionTokens)} out / ${fmtInt(u.totalTokens)} total</b></div>
+    </div>
+    <h4>Candidates <span style="text-transform:none;color:var(--muted);font-weight:400">(ranked by final score; gap = score below winner)</span></h4>
+    <table>
+      <thead><tr><th>Pod</th><th>Score</th><th>Gap</th><th>Running</th><th>Waiting</th><th>KV%</th><th>In-flight tok</th><th>Uncached tok</th><th>Prefix hit</th><th>Raw</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="10" class="empty">no candidates recorded</td></tr>'}</tbody>
+    </table>
+  </div>`;
+}
+
+/* ============================ flat requests tab ============================ */
+let REQ_SORT='e2e', REQ_FILTER='';
+function renderRequests(){
+  setActiveTab('requests'); SEL_SESSION=null; renderList();
+  const el=document.getElementById('mainPane');
+  let recs=RECORDS.slice();
+  const f=REQ_FILTER.trim().toLowerCase();
+  if(f) recs=recs.filter(r=>(r.fairnessID||'').toLowerCase().includes(f) || (r.servedPod||r.winnerPod||'').toLowerCase().includes(f));
+  const key={ttft:r=>r._ttft, e2e:r=>r._e2e, gap:r=>(r._topScore!=null&&r._servedCand?r._topScore-r._servedCand.finalScore:0), out:r=>r._out}[REQ_SORT]||(r=>r._e2e);
+  recs.sort((a,b)=>(key(b)||-Infinity)-(key(a)||-Infinity));
+  const total=recs.length;
+  SHOWN=recs.slice(0,REQ_TABLE_CAP);
+  SEL_REQ=null;
+
+  const rows=SHOWN.map((r,i)=>{
+    const chosen=r.servedPod||r.winnerPod||'';
+    const gap=(r._topScore!=null&&r._servedCand)?r._topScore-r._servedCand.finalScore:null;
+    const flags=(r.incomplete?'<span class="chip inc">inc</span> ':'')+(r._mismatchTop?'<span class="chip warn">not top</span>':'');
+    return `<tr class="req" data-req="${i}" onclick="openPanel(${i})">
+      <td class="mono" style="cursor:pointer" onclick="event.stopPropagation();selectSession('${esc(r.fairnessID||'')}')">${esc((r.fairnessID||'').slice(0,24))}</td>
+      <td class="mono">${esc((r.requestID||'').slice(0,8))}</td>
+      <td>${fmtInt(r._in)}</td><td>${fmtInt(r._out)}</td>
+      <td>${fmtMs(r._ttft)}</td><td>${fmtMs(r._e2e)}</td>
+      <td>${gap==null?'—':gap.toFixed(4)}</td>
+      <td><span class="podname">${esc(POD_SHORT(chosen))}</span></td>
+      <td>${flags}</td></tr>`;
+  }).join('');
+
+  const th=(k,lab)=>`<th class="sortable" onclick="setReqSort('${k}')">${lab}${REQ_SORT===k?' &darr;':''}</th>`;
+  el.innerHTML=`
+    <div class="crumbs"><b>Requests</b><span class="sep">&middot;</span><span style="color:var(--muted)">all sessions${total>REQ_TABLE_CAP?` &mdash; showing ${REQ_TABLE_CAP} of ${fmtInt(total)}`:''}</span></div>
+    <div class="section">
+      <div class="reqwrap"><table>
+        <thead><tr><th>Session</th><th>Req id</th><th>In</th><th>Out</th>${th('ttft','TTFT')}${th('e2e','E2E')}${th('gap','Score gap')}<th>Chosen pod</th><th></th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="9" class="empty">no matching requests</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div id="reqPanel" class="reqpanel" style="display:none"></div>`;
+}
+function setReqSort(k){ REQ_SORT=k; renderRequests(); }
+window.setReqSort=setReqSort;
+
+/* ============================ session rail list ============================ */
+function renderList(){
+  const q=(document.getElementById('searchBox').value||'').trim().toLowerCase();
+  const sort=document.getElementById('sortBy').value;
+  let list=[...SESSIONS.values()];
+  if(q) list=list.filter(s=>s.id.toLowerCase().includes(q) || [...s.stats.pods].some(p=>p.toLowerCase().includes(q)));
+  const keyf={count:s=>s.stats.count, ttft:s=>s.stats.ttftAvg, e2e:s=>s.stats.e2eAvg, out:s=>s.stats.outTot, id:s=>s.id}[sort];
+  list.sort((a,b)=> sort==='id' ? a.id.localeCompare(b.id) : keyf(b)-keyf(a));
+  SESS_ORDER=list.map(s=>s.id);
+  const maxCount=Math.max(1,...list.map(s=>s.stats.count));
+  document.getElementById('listCount').textContent=list.length;
+  document.getElementById('progList').innerHTML=list.slice(0,500).map(s=>`
+    <div class="progrow ${s.id===SEL_SESSION?'sel':''}" onclick="selectSession('${esc(s.id)}')">
+      <div class="pid" title="${esc(s.id)}">${esc(s.id)}</div>
+      <div class="cnt">${s.stats.count}</div>
+      <div class="bar"><i style="width:${(s.stats.count/maxCount*100).toFixed(1)}%"></i></div>
+    </div>`).join('') + (list.length>500?`<div class="list-head">showing 500 of ${list.length}</div>`:'');
+}
+window.selectSession=selectSession; window.renderOverview=renderOverview;
+
+/* ============================ tabs ============================ */
+function setActiveTab(name){
+  document.querySelectorAll('#tabs .tab').forEach(t=>{
+    t.classList.toggle('active', t.dataset.tab===name);
+    if(t.dataset.tab==='session') t.classList.toggle('disabled', !SEL_SESSION && name!=='session');
+  });
+}
+document.getElementById('tabs').addEventListener('click', e=>{
+  const t=e.target.closest('.tab'); if(!t||t.classList.contains('disabled')) return;
+  if(t.dataset.tab==='overview') renderOverview();
+  else if(t.dataset.tab==='requests') renderRequests();
+  else if(t.dataset.tab==='session' && SEL_SESSION) selectSession(SEL_SESSION);
+});
+
+/* ============================ load ============================ */
+function ingest(text){
+  const recs=[];
+  for(const line of text.split('\n')){
+    const s=line.trim(); if(!s) continue;
+    try{ recs.push(derive(JSON.parse(s))); }catch(e){ /* skip malformed line */ }
+  }
+  RECORDS=recs;
+  buildSessions();
+  document.getElementById('welcome').style.display='none';
+  document.getElementById('app').style.display='';
+  document.getElementById('globalMeta').textContent=`${fmtInt(RECORDS.length)} requests · ${fmtInt(SESSIONS.size)} sessions · ${ALL_PODS.length} pods`;
+  renderList();
+  renderOverview();
+}
+function loadFile(file){ const rd=new FileReader(); rd.onload=()=>ingest(rd.result); rd.readAsText(file); }
+
+const fileInput=document.getElementById('fileInput');
+document.getElementById('uploadBtn').onclick=()=>fileInput.click();
+document.getElementById('uploadCard').onclick=()=>fileInput.click();
+fileInput.onchange=e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); };
+document.getElementById('searchBox').addEventListener('input', renderList);
+document.getElementById('sortBy').addEventListener('change', renderList);
+document.getElementById('overviewBtn').onclick=renderOverview;
+
+const dz=document.getElementById('dropzone');
+let dragN=0;
+window.addEventListener('dragenter',e=>{e.preventDefault(); dragN++; dz.classList.add('show');});
+window.addEventListener('dragover',e=>e.preventDefault());
+window.addEventListener('dragleave',e=>{ dragN=Math.max(0,dragN-1); if(!dragN) dz.classList.remove('show'); });
+window.addEventListener('drop',e=>{ e.preventDefault(); dragN=0; dz.classList.remove('show');
+  const f=e.dataTransfer.files[0]; if(f) loadFile(f); });
+
+// Auto-load traces.jsonl sitting next to this file when served over HTTP.
+if(location.protocol!=='file:'){
+  fetch('traces.jsonl').then(r=>r.ok?r.text():null).then(t=>{ if(t) ingest(t); }).catch(()=>{});
+}
+</script>
+</body>
+</html>

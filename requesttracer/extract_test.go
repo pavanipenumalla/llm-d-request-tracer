@@ -7,12 +7,13 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
 
 // mkEndpoint builds a scheduling.Endpoint carrying the given attributes.
-// Endpoint attributes are keyed by string ("dataType/producerName").
-func mkEndpoint(name string, attrs map[string]fwkdl.Cloneable) fwksched.Endpoint {
+// Endpoint attributes are keyed by DataKey.
+func mkEndpoint(name string, attrs map[fwkplugin.DataKey]fwkdl.Cloneable) fwksched.Endpoint {
 	m := fwkdl.NewAttributes()
 	for k, v := range attrs {
 		m.Put(k, v)
@@ -85,12 +86,12 @@ func TestUnknownEmptyMarkedNotDropped(t *testing.T) {
 func TestDumpEndpointAttributesFull(t *testing.T) {
 	// Producers write endpoint attributes under DataKey.String(). Mirror that,
 	// including a non-default producer name.
-	prefixKey := attrprefix.PrefixCacheMatchInfoDataKey.WithNonEmptyProducerName("custom-prefix").String()
-	inflightKey := attrconcurrency.InFlightLoadDataKey.String()
-	uncachedKey := attrconcurrency.UncachedRequestTokensDataKey.String()
-	unknownKey := "SomeFutureSignal/future-producer"
+	prefixKey := attrprefix.PrefixCacheMatchInfoDataKey.WithNonEmptyProducerName("custom-prefix")
+	inflightKey := attrconcurrency.InFlightLoadDataKey
+	uncachedKey := attrconcurrency.UncachedRequestTokensDataKey
+	unknownKey := fwkplugin.NewDataKey("SomeFutureSignal", "future-producer")
 
-	ep := mkEndpoint("pod-a", map[string]fwkdl.Cloneable{
+	ep := mkEndpoint("pod-a", map[fwkplugin.DataKey]fwkdl.Cloneable{
 		prefixKey:   attrprefix.NewPrefixCacheMatchInfo(5, 20, 64),
 		inflightKey: &attrconcurrency.InFlightLoad{Tokens: 100, Requests: 3},
 		uncachedKey: &attrconcurrency.UncachedRequestTokens{Tokens: 7},
@@ -104,10 +105,10 @@ func TestDumpEndpointAttributesFull(t *testing.T) {
 	if len(ct.Attributes) != 4 {
 		t.Fatalf("expected 4 attributes, got %d: %v", len(ct.Attributes), ct.Attributes)
 	}
-	if _, ok := ct.Attributes[prefixKey]; !ok {
-		t.Fatalf("prefix key %q missing from bag", prefixKey)
+	if _, ok := ct.Attributes[prefixKey.String()]; !ok {
+		t.Fatalf("prefix key %q missing from bag", prefixKey.String())
 	}
-	if _, ok := ct.Attributes[unknownKey]; !ok {
+	if _, ok := ct.Attributes[unknownKey.String()]; !ok {
 		t.Fatalf("unknown key missing from bag (must not be dropped)")
 	}
 	for k, src := range ct.AttrSource {

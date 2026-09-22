@@ -90,8 +90,8 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	sink := &captureSink{}
 	p := newTestPlugin(sink, clock.now)
 
-	epA := mkEndpoint("ns/pod-a", map[string]fwkdl.Cloneable{
-		attrprefix.PrefixCacheMatchInfoDataKey.String(): attrprefix.NewPrefixCacheMatchInfo(2, 8, 64),
+	epA := mkEndpoint("ns/pod-a", map[fwkplugin.DataKey]fwkdl.Cloneable{
+		attrprefix.PrefixCacheMatchInfoDataKey: attrprefix.NewPrefixCacheMatchInfo(2, 8, 64),
 	})
 	epB := mkEndpoint("ns/pod-b", nil)
 
@@ -158,7 +158,7 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 		t.Fatalf("TotalEppMs = %v, want ~50", *tr.TotalEppMs)
 	}
 	// Arrival was stamped as a request attribute in RequestHeader.
-	if _, ok := tr.ReqAttributes[arrivalTimeKey]; !ok {
+	if _, ok := tr.ReqAttributes[arrivalTimeKey.String()]; !ok {
 		t.Fatalf("arrival-time attribute missing from ReqAttributes")
 	}
 	if tr.Incomplete {
@@ -204,7 +204,7 @@ func TestArrivalFromAttribute(t *testing.T) {
 		if tr.TotalEppMs == nil || *tr.TotalEppMs < 199 || *tr.TotalEppMs > 201 {
 			t.Fatalf("TotalEppMs = %v, want ~200", tr.TotalEppMs)
 		}
-		if _, ok := tr.ReqAttributes[arrivalTimeKey]; !ok {
+		if _, ok := tr.ReqAttributes[arrivalTimeKey.String()]; !ok {
 			t.Fatalf("ReqAttributes should contain the arrival-time key")
 		}
 	})

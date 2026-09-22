@@ -68,9 +68,9 @@ func unmarshalableMarker(v any) json.RawMessage {
 }
 
 // dumpEndpointAttributes reads every datalayer attribute present on the endpoint
-// into a bag keyed by the attribute's string key ("dataType/producerName"), with
-// per-key provenance, and fills the well-known typed convenience fields by
-// concrete type. Endpoint attributes are keyed by string in llm-d-router.
+// into a bag keyed by the attribute's DataKey rendered as "dataType/producerName",
+// with per-key provenance, and fills the well-known typed convenience fields by
+// concrete type.
 func dumpEndpointAttributes(ep fwksched.Endpoint, ct *CandidateTrace) {
 	keys := ep.Keys()
 	if len(keys) == 0 {
@@ -84,8 +84,8 @@ func dumpEndpointAttributes(ep fwksched.Endpoint, ct *CandidateTrace) {
 			continue
 		}
 		raw, _ := marshalAttr(val)
-		ct.Attributes[k] = raw
-		ct.AttrSource[k] = sourceRead
+		ct.Attributes[k.String()] = raw
+		ct.AttrSource[k.String()] = sourceRead
 		projectKnown(val, ct)
 	}
 }
@@ -147,10 +147,10 @@ func dumpRequestAttributes(req *fwksched.InferenceRequest) map[string]json.RawMe
 			// accessor-only Cloneables, so a marshal error is the only real loss
 			// case here -- an empty "{}" is a legitimate empty value, not the
 			// silent-loss hazard the endpoint path guards against.
-			out[k] = unmarshalableMarker(v)
+			out[k.String()] = unmarshalableMarker(v)
 			continue
 		}
-		out[k] = b
+		out[k.String()] = b
 	}
 	return out
 }

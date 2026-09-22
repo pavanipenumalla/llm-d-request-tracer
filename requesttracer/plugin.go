@@ -23,9 +23,8 @@ const PluginType = "request-tracer"
 // arrivalTimeKey is the request-attribute key under which the tracer stamps the
 // arrival time in RequestHeader and reads it back in PreRequest. Keeping arrival
 // on the request (rather than only in the tracer's store) makes it part of the
-// request's own attribute set and a single source of truth. Request attributes
-// are keyed by string in llm-d-router.
-const arrivalTimeKey = "request-tracer/arrival-time"
+// request's own attribute set and a single source of truth.
+var arrivalTimeKey = fwkplugin.NewDataKey("ArrivalTimeDataKey", PluginType)
 
 // Config is the plugin's YAML parameters.
 type Config struct {

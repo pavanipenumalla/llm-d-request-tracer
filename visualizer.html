@@ -254,6 +254,8 @@
           <option value="count">Turn count</option>
           <option value="ttft">Avg TTFT</option>
           <option value="e2e">Avg end-to-end</option>
+          <option value="moves">Pod changes</option>
+          <option value="moverate">Pod changes / turn</option>
           <option value="out">Output tokens</option>
           <option value="id">Session id</option>
         </select>
@@ -303,6 +305,25 @@ let TL_ZOOM = 1, TL_BASE_PXPS = 1;
 const REQ_TABLE_CAP = 1000;     // flat Requests tab render cap
 
 // Derived per-record fields (nulls when a timestamp is missing).
+// Tokens of prefill as milliseconds, the conversion prefix-cache-affinity-filter
+// itself uses. Per-deployment, so it is editable in the header: 68692 is the
+// calibrated figure for qwen-3-30b on 2x H100 (TP=2); the plugin default of
+// 15928 is wrong for it.
+let PEAK_PREFILL = 68692;
+// prefix-cache-affinity-filter's affinityThreshold: at or above this a pod counts
+// as sticky. Its default, and what this run used.
+const AFFINITY_THRESHOLD = 0.80;
+const SESSION_KEY = 'SessionStateDataKey/session-state-producer';
+const msOf = tok => (tok == null ? null : tok / PEAK_PREFILL * 1000);
+
+// The session's own turn counter, published by session-state-producer. Traces
+// are appended when a request finishes, so file order is completion order and
+// cannot be used to order a session's turns.
+function turnIndex(r){
+  const st = (r.reqAttributes || {})[SESSION_KEY];
+  return (st && typeof st.TurnsTaken === 'number') ? st.TurnsTaken : null;
+}
+
 function derive(r){
   const arr = tms(r.arrivalTime), disp = tms(r.dispatchTime), hdr = tms(r.headersTime);
   const ft = tms(r.firstTokenTime), done = tms(r.completionTime);
@@ -324,6 +345,13 @@ function derive(r){
   // prefix hit ratio from served candidate typed fields
   const sc=r._servedCand;
   r._prefixHit = (sc && sc.prefixTotalBlocks) ? (sc.prefixMatchBlocks||0)/sc.prefixTotalBlocks : null;
+  r._turn = turnIndex(r);
+  // entryCandidates is present only when the tracer is referenced from a
+  // schedulingProfile; without it there is no way to know what was removed.
+  r._entry = r.entryCandidates || [];
+  r._entryN = r._entry.length || null;
+  r._scoredN = (r.candidates || []).length;
+  r._removedN = r._entryN != null ? Math.max(0, r._entryN - r._scoredN) : null;
   r._in = r.usage ? r.usage.promptTokens : null;
   r._out = r.usage ? r.usage.completionTokens : null;
   r._cached = (sc && sc.prefixMatchBlocks!=null && sc.blockSizeTokens!=null)
@@ -343,11 +371,38 @@ function buildSessions(){
     if(r.servedPod) podset.add(r.servedPod);
   }
   for(const s of SESSIONS.values()){
-    s.records.sort((a,b)=>(a._arr||0)-(b._arr||0));
+    // Turn index first; arrival time only breaks ties or stands in when the
+    // session-state attribute is absent.
+    // Tie-break on the raw timestamp string, not on _arr: Date.parse truncates
+    // to milliseconds, and the tracer writes nanoseconds, so two requests in the
+    // same millisecond compare equal and keep file order. ISO-8601 strings of a
+    // fixed shape sort chronologically, so this keeps all nine digits.
+    s.records.sort((a,b)=>{
+      const ta=a._turn, tb=b._turn;
+      if(ta!=null && tb!=null && ta!==tb) return ta-tb;
+      if(ta!=null && tb==null) return -1;
+      if(ta==null && tb!=null) return 1;
+      return String(a.arrivalTime||'').localeCompare(String(b.arrivalTime||''));
+    });
+    markMigrations(s.records);
     s.stats = sessionStats(s.records);
   }
   ALL_PODS = [...podset].sort();
   POD_INDEX = new Map(ALL_PODS.map((p,i)=>[p,i]));
+}
+
+// A turn is a migration when a different pod served it than served the previous
+// turn whose pod is known. An unknown pod is skipped rather than treated as a
+// change, so one incomplete turn mid-session does not read as leaving and
+// returning. _fromPod carries where it came from, for the row detail.
+function markMigrations(recs){
+  let prev=null;
+  for(const r of recs){
+    const pod=r.servedPod||r.winnerPod||null;
+    r._moved = (prev!=null && pod!=null && pod!==prev);
+    r._fromPod = r._moved ? prev : null;
+    if(pod!=null) prev=pod;
+  }
 }
 
 function sessionStats(recs){
@@ -358,7 +413,15 @@ function sessionStats(recs){
   const prefix=recs.map(r=>r._prefixHit).filter(v=>v!=null);
   const firstTs=Math.min(...recs.map(r=>r._arr).filter(v=>v!=null));
   const lastTs=Math.max(...recs.map(r=>r._done||r._arr).filter(v=>v!=null));
+  const moves=recs.filter(r=>r._moved).length;
+  // Cost only bites when the destination was cold, so the bands are counted
+  // separately: a move onto a pod that already holds most of the prompt is
+  // nearly free.
+  const movedCold=recs.filter(r=>r._moved && r._prefixHit!=null && r._prefixHit<0.2).length;
+  const movedWarm=recs.filter(r=>r._moved && r._prefixHit!=null && r._prefixHit>=0.8).length;
   return {
+    moves, movedCold, movedWarm,
+    moveRate: recs.length>1 ? moves/(recs.length-1) : null,
     count:recs.length,
     ttftAvg:mean(ttft), ttftP95:pctl(ttft,95),
     e2eAvg:mean(e2e), e2eP95:pctl(e2e,95),
@@ -559,10 +622,26 @@ function tlLeave(){ const tip=document.getElementById('tlTip'); if(tip) tip.styl
 window.setTlZoom=setTlZoom; window.tlZoomFit=tlZoomFit; window.tlHover=tlHover; window.tlLeave=tlLeave;
 
 /* ============================ overview ============================ */
+// Run-wide migration picture. Session-level stats are already computed in
+// sessionStats, so this only adds them up.
+function runMigrationStats(){
+  let moves=0, cold=0, warm=0, movedSessions=0, rates=[];
+  for(const s of SESSIONS.values()){
+    moves += s.stats.moves;
+    cold  += s.stats.movedCold;
+    warm  += s.stats.movedWarm;
+    if(s.stats.moves > 0) movedSessions++;
+    if(s.stats.moveRate != null) rates.push(s.stats.moveRate);
+  }
+  return {moves, cold, warm, movedSessions, rateMean: rates.length?mean(rates):null,
+          rateP90: rates.length?pctl(rates,90):null};
+}
+
 function renderOverview(){
   setActiveTab('overview'); SEL_SESSION=null; renderList();
   const el=document.getElementById('mainPane');
   const recs=RECORDS;
+  const MG=runMigrationStats();
   const ttft=recs.map(r=>r._ttft).filter(v=>v!=null);
   const e2e=recs.map(r=>r._e2e).filter(v=>v!=null);
 
@@ -609,6 +688,11 @@ function renderOverview(){
         ${tile('Input tokens', fmtInt(sum(recs.map(r=>r._in||0))))}
         ${tile('Output tokens', fmtInt(sum(recs.map(r=>r._out||0))))}
         ${tile('Served &ne; winner', fmtInt(served_ne_winner), 'served pod differs from winner', served_ne_winner>0)}
+        ${tile('Pod changes', fmtInt(MG.moves), 'across all sessions')}
+        ${tile('Sessions that moved', `${fmtInt(MG.movedSessions)} / ${fmtInt(SESSIONS.size)}`)}
+        ${tile('Change rate', fmtPct(MG.rateMean), 'mean per session &middot; p90 '+fmtPct(MG.rateP90))}
+        ${tile('Moved onto a cold pod', fmtInt(MG.cold), 'prefix &lt; 20% &mdash; the costly ones', MG.cold>0)}
+        ${tile('Moved onto a warm pod', fmtInt(MG.warm), 'prefix &ge; 80% &mdash; nearly free')}
       </div>
     </div>
     <div class="grid2">
@@ -700,6 +784,9 @@ function selectSession(id){
         ${tile('Input tokens', fmtInt(st.inTot))}
         ${tile('Output tokens', fmtInt(st.outTot))}
         ${tile('Prefix hit ratio', fmtPct(st.prefixAvg))}
+        ${tile('Pod changes', fmtInt(st.moves), st.moveRate!=null?fmtPct(st.moveRate)+' of turns':'')}
+        ${tile('&hellip; onto a cold pod', fmtInt(st.movedCold), 'prefix &lt; 20% &mdash; the expensive ones')}
+        ${tile('&hellip; onto a warm pod', fmtInt(st.movedWarm), 'prefix &ge; 80% &mdash; nearly free')}
       </div>
     </div>
     <div class="grid2">
@@ -748,19 +835,27 @@ function selectSession(id){
   renderTimeline();
 }
 
-const TURN_HEAD=`<thead><tr><th>Arrival</th><th>Req id</th><th>In</th><th>Out</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Cands</th><th>Chosen pod</th><th></th></tr></thead>`;
+const TURN_HEAD=`<thead><tr><th>Turn</th><th>Arrival</th><th>Req id</th><th>In</th><th>Out</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Pods</th><th>Chosen pod</th><th>Moved from</th><th></th></tr></thead>`;
 function turnRowHTML(i){
   const r=SHOWN[i];
   const chosen=r.servedPod||r.winnerPod||'';
   const dot=`<i class="tlbar-dot" style="background:${podColorVar(POD_INDEX.get(chosen))}"></i>`;
   const flags=(r.incomplete?'<span class="chip inc">inc</span> ':'')+(r._mismatchTop?'<span class="chip warn">not top</span>':'');
+  // Band the destination: a move onto a warm pod costs almost nothing, a move
+  // onto a cold one pays full prefill for the whole conversation so far.
+  const band=r._prefixHit==null?'':(r._prefixHit>=0.8?'served':(r._prefixHit<0.2?'inc':'warn'));
+  const movedCell=r._moved
+    ? `<span class="chip ${band||'warn'}">&#8644; ${esc(POD_SHORT(r._fromPod))}</span>`
+    : '<span style="color:var(--muted)">&mdash;</span>';
   return `<tr class="req ${i===SEL_REQ?'sel':''}" data-req="${i}" onclick="openPanel(${i})">
+    <td class="mono">${r._turn!=null?r._turn:'—'}</td>
     <td class="mono">${r._arr!=null?hmsMs(r._arr):'—'}</td>
     <td class="mono">${esc((r.requestID||'').slice(0,8))}</td>
     <td>${fmtInt(r._in)}</td><td>${fmtInt(r._out)}</td>
     <td>${fmtPct(r._prefixHit)}</td><td>${fmtMs(r._ttft)}</td><td>${fmtMs(r._e2e)}</td>
-    <td>${(r.candidates||[]).length}</td>
+    <td title="entered the scheduler &rarr; survived the filters">${r._entryN!=null?`${r._entryN}&rarr;${r._scoredN}`:r._scoredN}</td>
     <td>${dot}<span class="podname">${esc(POD_SHORT(chosen))}</span></td>
+    <td>${movedCell}</td>
     <td>${flags}</td></tr>`;
 }
 function kvColor(u){ if(u<0.15)return'var(--seq-100)'; if(u<0.35)return'var(--seq-250)'; if(u<0.6)return'var(--seq-400)'; if(u<0.85)return'var(--seq-550)'; return'var(--seq-700)'; }
@@ -793,12 +888,60 @@ function timingStrip(r){
   return `<div class="strip">${bar||'<div class="seg" style="flex:1;background:var(--muted)">no timing</div>'}</div><div class="striplab">${lab}</div>`;
 }
 
+// One row per endpoint the scheduler started with. A survivor carries its score
+// from the scored set; a removed endpoint carries only what it had at entry,
+// because scoring runs after filtering and never saw it.
+function mergedCandidates(r){
+  const scored = new Map((r.candidates || []).map(c => [c.pod, c]));
+  if(!r._entry.length){
+    // No probe configured: all we have is the survivors.
+    return [...(r.candidates || [])].sort((a,b)=>b.finalScore-a.finalScore)
+             .map(c => ({c, survived:true, known:true}));
+  }
+  const rows = r._entry.map(e => {
+    const win = scored.get(e.pod);
+    return win ? {c:win, survived:true, known:true} : {c:e, survived:false, known:true};
+  });
+  // Anything scored but absent at entry would mean the probe ran late; show it
+  // rather than hide it.
+  for(const [pod,c] of scored){
+    if(!r._entry.some(e=>e.pod===pod)) rows.push({c, survived:true, known:false});
+  }
+  rows.sort((a,b)=>{
+    if(a.survived!==b.survived) return a.survived ? -1 : 1;
+    return (b.c.finalScore||0)-(a.c.finalScore||0);
+  });
+  return rows;
+}
+
+function pipelineHTML(r){
+  if(r._entryN == null){
+    return `<p style="color:var(--muted);font-size:12px;margin:0 0 8px">
+      Only the endpoints that survived the filters are recorded. Reference
+      <code>request-tracer</code> from the scheduling profile to capture the full
+      set and see what was removed.</p>`;
+  }
+  const removed = r._entry.filter(e => !(r.candidates||[]).some(c=>c.pod===e.pod));
+  const chips = removed.map(e=>`<span class="chip inc">${esc(POD_SHORT(e.pod))}</span>`).join(' ');
+  return `<div class="strip" style="margin-bottom:6px">
+      <div class="seg" style="flex:${r._entryN};background:var(--series-5)">entered ${r._entryN}</div>
+      <div class="seg" style="flex:${Math.max(1,r._scoredN)};background:var(--series-2)">scored ${r._scoredN}</div>
+      <div class="seg" style="flex:1;background:var(--good)">picked 1</div>
+    </div>
+    <div class="striplab">
+      ${removed.length
+        ? `removed by the filters: ${chips}`
+        : '<span style="color:var(--muted)">the filters removed nothing</span>'}
+    </div>`;
+}
+
 function decisionHTML(r){
   const winnerScore=r.winnerPod ? (r.candidates||[]).find(c=>c.pod===r.winnerPod)?.finalScore : r._topScore;
-  const cands=[...(r.candidates||[])].sort((a,b)=>b.finalScore-a.finalScore);
-  const rows=cands.map((c,ci)=>{
+  const merged=mergedCandidates(r);
+  const rows=merged.map((entryRow,ci)=>{
+    const c=entryRow.c, survived=entryRow.survived;
     const m=c.metrics||{};
-    const gap=(winnerScore!=null)?winnerScore-c.finalScore:null;
+    const gap=(winnerScore!=null && c.finalScore!=null)?winnerScore-c.finalScore:null;
     const isWin=c.pod===r.winnerPod, isServed=c.pod===(r.servedPod||r.winnerPod);
     const flags=[
       c.isWinner||isWin?'<span class="chip chosen">winner</span>':'',
@@ -806,6 +949,12 @@ function decisionHTML(r){
       (isWin&&r._mismatchServe)?'<span class="chip warn">not served</span>':'',
     ].filter(Boolean).join(' ');
     const prefix=(c.prefixTotalBlocks)?`${c.prefixMatchBlocks||0}/${c.prefixTotalBlocks} (${fmtPct((c.prefixMatchBlocks||0)/c.prefixTotalBlocks)})`:'—';
+    // The two halves of the filter's cost function, rebuilt from the recorded
+    // attributes: M(E) is the prefill this pod owes for tokens it has not
+    // cached, paid once; queue(E) is what this pod makes the session wait on
+    // every remaining turn. Total cost is M + queue*R, and R is not recorded.
+    const mMs=msOf(c.uncachedRequestTokens), qMs=msOf(c.inFlightTokens);
+    const sticky=(c.prefixTotalBlocks && (c.prefixMatchBlocks||0)/c.prefixTotalBlocks >= AFFINITY_THRESHOLD);
     const rid='raw'+(RAW_SEQ++);
     const attrKeys=Object.keys(c.attributes||{});
     const rawRows=attrKeys.map(k=>{
@@ -815,19 +964,27 @@ function decisionHTML(r){
         <td class="rawval">${esc(JSON.stringify(c.attributes[k]))}</td></tr>`;
     }).join('');
     const rowCls=(isWin?'winnerpod ':'')+(isServed?'servedpod':'');
-    return `<tr class="${rowCls}">
-        <td><i class="swatch" style="background:${podColorVar(POD_INDEX.get(c.pod))};margin-right:6px"></i><span class="podname">${esc(POD_SHORT(c.pod))}</span> ${flags}</td>
-        <td>${c.finalScore.toFixed(4)}</td>
-        <td>${gap==null?'—':(gap===0?'&mdash;':'-'+gap.toFixed(4))}</td>
+    // A removed endpoint is dimmed and its score shown as a dash: it was never
+    // scored, so 0 would read as "scored zero".
+    const rowStyle=survived?'':'opacity:.55';
+    const removedChip=survived?'':'<span class="chip inc">removed</span>';
+    const scoreCell=survived?c.finalScore.toFixed(4):'&mdash;';
+    const gapCell=!survived?'&mdash;':(gap==null?'—':(gap===0?'&mdash;':'-'+gap.toFixed(4)));
+    return `<tr class="${rowCls}" style="${rowStyle}">
+        <td><i class="swatch" style="background:${podColorVar(POD_INDEX.get(c.pod))};margin-right:6px"></i><span class="podname">${esc(POD_SHORT(c.pod))}</span> ${flags} ${removedChip}</td>
+        <td>${scoreCell}</td>
+        <td>${gapCell}</td>
         <td>${fmtInt(m.runningRequestsSize)}</td>
         <td>${fmtInt(m.waitingQueueSize)}</td>
         <td>${m.kvCacheUsagePercent!=null?fmtPct(m.kvCacheUsagePercent):'—'}</td>
         <td>${fmtInt(c.inFlightTokens)}</td>
         <td>${fmtInt(c.uncachedRequestTokens)}</td>
-        <td>${prefix}</td>
+        <td>${prefix} ${sticky?'<span class="chip served">sticky</span>':''}</td>
+        <td>${fmtMs(mMs)}</td>
+        <td>${fmtMs(qMs)}</td>
         <td>${attrKeys.length?`<span class="rawtoggle" onclick="document.getElementById('${rid}').classList.toggle('open')">raw (${attrKeys.length})</span>`:'—'}</td>
       </tr>
-      <tr class="rawbody" id="${rid}"><td colspan="10">
+      <tr class="rawbody" id="${rid}"><td colspan="12">
         <table class="rawtbl"><thead><tr><th>attribute key</th><th>source</th><th>value</th></tr></thead><tbody>${rawRows}</tbody></table>
       </td></tr>`;
   }).join('');
@@ -848,10 +1005,19 @@ function decisionHTML(r){
       <div><span style="color:var(--muted)">E2E</span><b>${fmtMs(r._e2e)}</b></div>
       <div><span style="color:var(--muted)">tokens</span><b>${fmtInt(u.promptTokens)} in / ${fmtInt(u.completionTokens)} out / ${fmtInt(u.totalTokens)} total</b></div>
     </div>
-    <h4>Candidates <span style="text-transform:none;color:var(--muted);font-weight:400">(ranked by final score; gap = score below winner)</span></h4>
+    <h4>Pipeline</h4>
+    ${pipelineHTML(r)}
+    <h4>Candidates <span style="text-transform:none;color:var(--muted);font-weight:400">(survivors first, by score; removed endpoints dimmed)</span></h4>
+    <p style="color:var(--muted);font-size:12px;margin:0 0 8px">
+      Only the candidates that survived the filter are recorded, so a pod the filter
+      removed does not appear here. M(E) and queue(E) are recomputed from the recorded
+      attributes at ${PEAK_PREFILL.toLocaleString()} tok/s. The filter minimises
+      M(E) + queue(E) &times; R; R is held in the filter and is not recorded, so the
+      comparison it actually made cannot be reproduced from this trace.
+    </p>
     <table>
-      <thead><tr><th>Pod</th><th>Score</th><th>Gap</th><th>Running</th><th>Waiting</th><th>KV%</th><th>In-flight tok</th><th>Uncached tok</th><th>Prefix hit</th><th>Raw</th></tr></thead>
-      <tbody>${rows||'<tr><td colspan="10" class="empty">no candidates recorded</td></tr>'}</tbody>
+      <thead><tr><th>Pod</th><th>Score</th><th>Gap</th><th>Running</th><th>Waiting</th><th>KV%</th><th>In-flight tok</th><th>Uncached tok</th><th>Prefix hit</th><th>M(E)</th><th>queue(E)</th><th>Raw</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="12" class="empty">no candidates recorded</td></tr>'}</tbody>
     </table>
   </div>`;
 }
@@ -904,7 +1070,9 @@ function renderList(){
   const sort=document.getElementById('sortBy').value;
   let list=[...SESSIONS.values()];
   if(q) list=list.filter(s=>s.id.toLowerCase().includes(q) || [...s.stats.pods].some(p=>p.toLowerCase().includes(q)));
-  const keyf={count:s=>s.stats.count, ttft:s=>s.stats.ttftAvg, e2e:s=>s.stats.e2eAvg, out:s=>s.stats.outTot, id:s=>s.id}[sort];
+  const keyf={count:s=>s.stats.count, ttft:s=>s.stats.ttftAvg, e2e:s=>s.stats.e2eAvg,
+              out:s=>s.stats.outTot, id:s=>s.id,
+              moves:s=>s.stats.moves, moverate:s=>s.stats.moveRate||0}[sort];
   list.sort((a,b)=> sort==='id' ? a.id.localeCompare(b.id) : keyf(b)-keyf(a));
   SESS_ORDER=list.map(s=>s.id);
   const maxCount=Math.max(1,...list.map(s=>s.stats.count));
@@ -912,7 +1080,7 @@ function renderList(){
   document.getElementById('progList').innerHTML=list.slice(0,500).map(s=>`
     <div class="progrow ${s.id===SEL_SESSION?'sel':''}" onclick="selectSession('${esc(s.id)}')">
       <div class="pid" title="${esc(s.id)}">${esc(s.id)}</div>
-      <div class="cnt">${s.stats.count}</div>
+      <div class="cnt" title="turns / pod changes">${s.stats.count}${s.stats.moves?` <span style="color:var(--warn)">&#8644;${s.stats.moves}</span>`:''}</div>
       <div class="bar"><i style="width:${(s.stats.count/maxCount*100).toFixed(1)}%"></i></div>
     </div>`).join('') + (list.length>500?`<div class="list-head">showing 500 of ${list.length}</div>`:'');
 }

@@ -4,6 +4,21 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
+// snapshotEndpoints records each endpoint as it stands right now, with no score:
+// this runs during filtering, before any scorer has seen them.
+func snapshotEndpoints(endpoints []fwksched.Endpoint) []CandidateTrace {
+	out := make([]CandidateTrace, 0, len(endpoints))
+	for _, ep := range endpoints {
+		if ep == nil {
+			continue
+		}
+		ct := CandidateTrace{Pod: podID(ep), Metrics: snapshotMetrics(ep.GetMetrics())}
+		dumpEndpointAttributes(ep, &ct)
+		out = append(out, ct)
+	}
+	return out
+}
+
 // candidatesFrom extracts the per-candidate trace entries and the winner pod
 // from the primary profile's result. ScoredCandidates carries the final weighted
 // score of every candidate; TargetEndpoints identifies the winner(s).

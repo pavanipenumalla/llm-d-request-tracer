@@ -9,8 +9,9 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
-	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	requesthandling "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
+	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -81,7 +82,7 @@ func resultWith(winner string, candidates ...fwksched.Endpoint) *fwksched.Schedu
 func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{times: []time.Time{
-		base,                       // RequestHeader (arrival)
+		base,                             // RequestHeader (arrival)
 		base.Add(50 * time.Millisecond),  // PreRequest (dispatch)
 		base.Add(120 * time.Millisecond), // ResponseHeader (headers)
 		base.Add(130 * time.Millisecond), // ResponseBody StartOfStream (first token)
@@ -243,4 +244,108 @@ func TestInterfaceAssertions(t *testing.T) {
 	var _ fwkrc.ResponseHeaderProcessor = &Plugin{}
 	var _ fwkrc.ResponseBodyProcessor = &Plugin{}
 	var _ fwkplugin.Plugin = &Plugin{}
+}
+
+// ---------- Filter hook: the endpoints a later filter removes ----------
+
+func TestFilterReturnsInputUnchanged(t *testing.T) {
+	// A tracer that dropped an endpoint would change routing. It must not.
+	p := newTestPlugin(&captureSink{}, func() time.Time { return time.Unix(0, 0) })
+	eps := []fwksched.Endpoint{
+		mkEndpoint("ns/pod-a", map[fwkplugin.DataKey]fwkdl.Cloneable{
+			attrprefix.PrefixCacheMatchInfoDataKey: attrprefix.NewPrefixCacheMatchInfo(8, 10, 64),
+		}),
+		mkEndpoint("ns/pod-b", nil),
+	}
+	req := &fwksched.InferenceRequest{RequestID: "req-1"}
+	got := p.Filter(context.Background(), req, eps)
+	if len(got) != len(eps) {
+		t.Fatalf("Filter changed the candidate set: got %d, want %d", len(got), len(eps))
+	}
+	for i := range got {
+		if got[i] != eps[i] {
+			t.Fatalf("Filter reordered or replaced endpoint %d", i)
+		}
+	}
+}
+
+func TestFilterRecordsEveryEntryCandidate(t *testing.T) {
+	sink := &captureSink{}
+	p := newTestPlugin(sink, func() time.Time { return time.Unix(100, 0) })
+	eps := []fwksched.Endpoint{
+		mkEndpoint("ns/pod-a", map[fwkplugin.DataKey]fwkdl.Cloneable{
+			attrprefix.PrefixCacheMatchInfoDataKey: attrprefix.NewPrefixCacheMatchInfo(8, 10, 64),
+		}),
+		mkEndpoint("ns/pod-b", nil),
+		mkEndpoint("ns/pod-c", nil),
+	}
+	req := &fwksched.InferenceRequest{RequestID: "req-1"}
+	p.Filter(context.Background(), req, eps)
+
+	e := p.store.get("req-1")
+	if e == nil {
+		t.Fatal("Filter recorded nothing")
+	}
+	if got := len(e.trace.EntryCandidates); got != 3 {
+		t.Fatalf("EntryCandidates = %d, want 3", got)
+	}
+	// The pod the filter would later drop must carry its attributes, since that
+	// is the entire reason for capturing the set this early.
+	var podA *CandidateTrace
+	for i := range e.trace.EntryCandidates {
+		if e.trace.EntryCandidates[i].Pod == "ns/pod-a" {
+			podA = &e.trace.EntryCandidates[i]
+		}
+	}
+	if podA == nil {
+		t.Fatal("pod-a missing from EntryCandidates")
+	}
+	if podA.PrefixMatchBlocks == nil || *podA.PrefixMatchBlocks != 8 {
+		t.Fatalf("pod-a prefix match blocks not captured: %+v", podA.PrefixMatchBlocks)
+	}
+	if podA.FinalScore != 0 {
+		t.Fatalf("entry candidates run before scoring, so FinalScore must be 0, got %v", podA.FinalScore)
+	}
+}
+
+func TestFilterKeepsTheFirstProfilesSet(t *testing.T) {
+	// Several profiles can run for one request; the widest (first) set is kept.
+	p := newTestPlugin(&captureSink{}, func() time.Time { return time.Unix(0, 0) })
+	req := &fwksched.InferenceRequest{RequestID: "req-1"}
+	p.Filter(context.Background(), req, []fwksched.Endpoint{
+		mkEndpoint("ns/pod-a", nil), mkEndpoint("ns/pod-b", nil), mkEndpoint("ns/pod-c", nil),
+	})
+	p.Filter(context.Background(), req, []fwksched.Endpoint{mkEndpoint("ns/pod-a", nil)})
+	if got := len(p.store.get("req-1").trace.EntryCandidates); got != 3 {
+		t.Fatalf("EntryCandidates = %d, want the first set of 3", got)
+	}
+}
+
+func TestFilterWithoutRequestIDIsANoOp(t *testing.T) {
+	p := newTestPlugin(&captureSink{}, func() time.Time { return time.Unix(0, 0) })
+	eps := []fwksched.Endpoint{mkEndpoint("ns/pod-a", nil)}
+	if got := p.Filter(context.Background(), &fwksched.InferenceRequest{}, eps); len(got) != 1 {
+		t.Fatal("Filter must pass endpoints through even when it cannot record them")
+	}
+	if got := p.Filter(context.Background(), nil, eps); len(got) != 1 {
+		t.Fatal("Filter must tolerate a nil request")
+	}
+}
+
+func TestConsumesDeclaresTheAttributesItReads(t *testing.T) {
+	// Scope-wrapped endpoints hide undeclared keys, so an unlisted attribute
+	// would silently come back empty.
+	dep := (&Plugin{}).Consumes()
+	if len(dep.Required) != 0 {
+		t.Fatalf("a tracer must require nothing, got %v", dep.Required)
+	}
+	for _, k := range []fwkplugin.DataKey{
+		attrprefix.PrefixCacheMatchInfoDataKey,
+		attrconcurrency.InFlightLoadDataKey,
+		attrconcurrency.UncachedRequestTokensDataKey,
+	} {
+		if _, ok := dep.Optional[k]; !ok {
+			t.Fatalf("Consumes does not declare %s", k.String())
+		}
+	}
 }

@@ -15,6 +15,8 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
 
 // PluginType is the config `type:` string that selects this plugin.
@@ -87,6 +89,7 @@ var (
 	_ fwkrc.PreRequest              = &Plugin{}
 	_ fwkrc.ResponseHeaderProcessor = &Plugin{}
 	_ fwkrc.ResponseBodyProcessor   = &Plugin{}
+	_ fwksched.Filter               = &Plugin{}
 )
 
 // Factory instantiates the plugin from config. Matches fwkplugin.FactoryFunc.
@@ -160,6 +163,45 @@ func (p *Plugin) RequestHeader(_ context.Context, request *fwksched.InferenceReq
 		p.metrics.inProgress.Inc()
 	}
 	return nil
+}
+
+// Filter records the candidate set as it enters the scheduling profile and
+// returns it unchanged. Referencing this plugin FIRST in a profile's plugin list
+// is what makes the endpoints a filter later removes visible at all: the
+// scheduling result carries only what survived.
+//
+// It never drops anything, so it is safe at any position; earlier simply sees
+// more.
+func (p *Plugin) Filter(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+	if request == nil || request.RequestID == "" {
+		return endpoints
+	}
+	now := p.now()
+	snap := snapshotEndpoints(endpoints)
+	e := p.store.getOrCreate(request.RequestID, now)
+	e.with(now, func(t *RequestTrace) {
+		// A request can run several profiles; keep the first, widest set.
+		if t.EntryCandidates == nil {
+			t.EntryCandidates = snap
+		}
+	})
+	return endpoints
+}
+
+// Consumes declares the endpoint attributes the Filter hook reads. Declaring is
+// mandatory, not optional: the framework hands filters scope-wrapped endpoints,
+// where Get on an undeclared key is rejected and Keys() hides it, so an
+// undeclared tracer would record empty attribute bags.
+//
+// All Optional: a missing producer must degrade the trace, never fail the run.
+func (p *Plugin) Consumes() fwkplugin.DataDependencies {
+	return fwkplugin.DataDependencies{
+		Optional: map[fwkplugin.DataKey]any{
+			attrprefix.PrefixCacheMatchInfoDataKey:       attrprefix.PrefixCacheMatchInfo{},
+			attrconcurrency.InFlightLoadDataKey:          attrconcurrency.InFlightLoad{},
+			attrconcurrency.UncachedRequestTokensDataKey: attrconcurrency.UncachedRequestTokens{},
+		},
+	}
 }
 
 // PreRequest records the resolved FairnessID, the scheduling outcome (winner,

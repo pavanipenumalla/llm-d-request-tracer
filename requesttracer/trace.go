@@ -9,9 +9,9 @@ import (
 // RequestTrace is the per-request record emitted once a request completes (or is
 // swept). It is the serialized event; all timestamps are wall-clock.
 type RequestTrace struct {
-	RequestID   string    `json:"requestID"`
-	FairnessID  string    `json:"fairnessID,omitempty"`
-	TargetModel string    `json:"targetModel,omitempty"`
+	RequestID   string `json:"requestID"`
+	FairnessID  string `json:"fairnessID,omitempty"`
+	TargetModel string `json:"targetModel,omitempty"`
 	// ArrivalTime is when the tracer first saw the request. Stamped as a request
 	// attribute in RequestHeader and read back from there, so it is part of the
 	// request's own attribute store (also visible in ReqAttributes).
@@ -30,17 +30,24 @@ type RequestTrace struct {
 	TotalEppMs *float64 `json:"totalEppMs,omitempty"`
 	// Incomplete is true when the trace was finalized by the staleness sweeper
 	// rather than by a clean end-of-stream (e.g. an aborted request).
-	Incomplete bool            `json:"incomplete,omitempty"`
-	WinnerPod  string          `json:"winnerPod,omitempty"`
+	Incomplete bool   `json:"incomplete,omitempty"`
+	WinnerPod  string `json:"winnerPod,omitempty"`
 	// ServedPod is the endpoint that actually served the response, from the
 	// targetEndpoint passed to the response hooks. Normally equals WinnerPod;
 	// captured separately to confirm the scheduled winner is who replied.
 	ServedPod string `json:"servedPod,omitempty"`
 	// ResponseStatus is the HTTP status from the response headers (e.g. "200"),
 	// when present. Empty if the header was not surfaced.
-	ResponseStatus string           `json:"responseStatus,omitempty"`
-	Candidates     []CandidateTrace `json:"candidates,omitempty"`
-	Usage          Usage            `json:"usage"`
+	ResponseStatus string `json:"responseStatus,omitempty"`
+	// EntryCandidates is every endpoint the scheduler started with, captured by
+	// the Filter hook before any filter narrowed the set. Candidates below holds
+	// only what survived, so the difference is what the filters removed. Empty
+	// unless this plugin is referenced from a schedulingProfile. FinalScore is
+	// always 0 here: scoring runs after filtering, so a removed endpoint never
+	// had one.
+	EntryCandidates []CandidateTrace `json:"entryCandidates,omitempty"`
+	Candidates      []CandidateTrace `json:"candidates,omitempty"`
+	Usage           Usage            `json:"usage"`
 	// ReqAttributes is every entry in the request's own attribute store -- the
 	// arrival-time the tracer stamps, plus whatever other plugins published
 	// (e.g. agent-identity).

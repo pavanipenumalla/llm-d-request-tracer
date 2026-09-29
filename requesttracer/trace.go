@@ -59,6 +59,10 @@ type Usage struct {
 	PromptTokens     int `json:"promptTokens"`
 	CompletionTokens int `json:"completionTokens"`
 	TotalTokens      int `json:"totalTokens"`
+	// CachedTokens is the model server's own count of prompt tokens served from
+	// its prefix cache (prompt_tokens_details.cached_tokens). Absent when the
+	// server does not report it; vLLM needs --enable-prompt-tokens-details.
+	CachedTokens *int `json:"cachedTokens,omitempty"`
 }
 
 // CandidateTrace records one scheduling candidate: its final weighted score, a

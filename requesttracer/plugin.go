@@ -316,6 +316,10 @@ func (p *Plugin) ResponseBody(_ context.Context, request *fwksched.InferenceRequ
 			CompletionTokens: response.Usage.CompletionTokens,
 			TotalTokens:      response.Usage.TotalTokens,
 		}
+		if d := response.Usage.PromptTokenDetails; d != nil {
+			cached := d.CachedTokens
+			t.Usage.CachedTokens = &cached
+		}
 		out = *t
 	})
 	p.store.delete(request.RequestID)

@@ -112,7 +112,10 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	p.ResponseBody(context.Background(), req, &fwkrc.Response{
 		RequestID:   "req-1",
 		EndOfStream: true,
-		Usage:       requesthandling.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Usage: requesthandling.Usage{
+			PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
+			PromptTokenDetails: &requesthandling.PromptTokenDetails{CachedTokens: 7},
+		},
 	}, nil)
 
 	traces := sink.all()
@@ -135,6 +138,9 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	}
 	if tr.Usage.TotalTokens != 15 {
 		t.Fatalf("usage not captured: %+v", tr.Usage)
+	}
+	if tr.Usage.CachedTokens == nil || *tr.Usage.CachedTokens != 7 {
+		t.Fatalf("cached tokens not captured: %+v", tr.Usage)
 	}
 	if len(tr.Candidates) != 2 {
 		t.Fatalf("expected 2 candidates, got %d", len(tr.Candidates))
@@ -175,6 +181,35 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 
 // TestArrivalFromAttribute confirms arrival is stamped as a request attribute in
 // RequestHeader and read back in PreRequest to compute TotalEppMs.
+func TestCachedTokensAbsentWhenNotReported(t *testing.T) {
+	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	clock := &fakeClock{times: []time.Time{
+		base,                             // RequestHeader (arrival)
+		base.Add(50 * time.Millisecond),  // PreRequest (dispatch)
+		base.Add(400 * time.Millisecond), // ResponseBody EndOfStream (completion)
+	}}
+	sink := &captureSink{}
+	p := newTestPlugin(sink, clock.now)
+
+	req := &fwksched.InferenceRequest{RequestID: "req-3"}
+	_ = p.RequestHeader(context.Background(), req)
+	_ = p.PreRequest(context.Background(), req, resultWith(""))
+	p.ResponseBody(context.Background(), req, &fwkrc.Response{
+		RequestID:   "req-3",
+		EndOfStream: true,
+		Usage:       requesthandling.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}, nil)
+
+	traces := sink.all()
+	if len(traces) != 1 {
+		t.Fatalf("expected exactly 1 emitted trace, got %d", len(traces))
+	}
+	// A model server that omits prompt_tokens_details must not read as 0 cached.
+	if traces[0].Usage.CachedTokens != nil {
+		t.Fatalf("CachedTokens = %d, want absent", *traces[0].Usage.CachedTokens)
+	}
+}
+
 func TestArrivalFromAttribute(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{times: []time.Time{

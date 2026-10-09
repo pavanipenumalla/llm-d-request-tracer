@@ -11,7 +11,7 @@
 ARG BASE_IMAGE=gcr.io/distroless/static:nonroot
 
 # Go build stage. go 1.26.6 to satisfy llm-d-router v0.10.0's go directive.
-FROM --platform=${BUILDPLATFORM} golang:1.26.6 AS go-builder
+FROM --platform=${BUILDPLATFORM} golang:1.27.1 AS go-builder
 
 ARG TARGETOS
 ARG TARGETARCH

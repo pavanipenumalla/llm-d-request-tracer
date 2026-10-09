@@ -8,6 +8,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrlatency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/latency"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
 
@@ -93,7 +94,7 @@ func TestDumpEndpointAttributesFull(t *testing.T) {
 
 	ep := mkEndpoint("pod-a", map[fwkplugin.DataKey]fwkdl.Cloneable{
 		prefixKey:   attrprefix.NewPrefixCacheMatchInfo(5, 20, 64),
-		inflightKey: &attrconcurrency.InFlightLoad{Tokens: 100, Requests: 3},
+		inflightKey: &attrconcurrency.InFlightLoad{Tokens: 100, Requests: 3, CompletionsPerSecond: 1.5},
 		uncachedKey: &attrconcurrency.UncachedRequestTokens{Tokens: 7},
 		unknownKey:  &unmarshalableAttr{secret: 1},
 	})
@@ -127,8 +128,36 @@ func TestDumpEndpointAttributesFull(t *testing.T) {
 	if ct.InFlightTokens == nil || *ct.InFlightTokens != 100 {
 		t.Fatalf("InFlightTokens projection wrong: %v", ct.InFlightTokens)
 	}
+	if ct.CompletionsPerSecond == nil || *ct.CompletionsPerSecond != 1.5 {
+		t.Fatalf("CompletionsPerSecond projection wrong: %v", ct.CompletionsPerSecond)
+	}
 	if ct.UncachedRequestTokens == nil || *ct.UncachedRequestTokens != 7 {
 		t.Fatalf("UncachedRequestTokens projection wrong: %v", ct.UncachedRequestTokens)
+	}
+}
+
+// TestLatencyPredictionInfoProjected: LatencyPredictionInfo has only unexported
+// fields, so it must go through the extractor registry, and its TTFT fills the
+// typed projection.
+func TestLatencyPredictionInfoProjected(t *testing.T) {
+	info := attrlatency.NewLatencyPredictionInfo(true, false, 10, -5, 1234.5, 20, 3)
+	raw, ok := marshalAttr(info)
+	if !ok {
+		t.Fatalf("LatencyPredictionInfo marshalled as unmarshalable: %s", raw)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["ttftMs"] != 1234.5 || got["dispatchedRequestCount"] != float64(3) {
+		t.Fatalf("LatencyPredictionInfo projection wrong: %s", raw)
+	}
+
+	ep := mkEndpoint("pod-l", map[fwkplugin.DataKey]fwkdl.Cloneable{attrlatency.LatencyPredictionInfoDataKey: info})
+	var ct CandidateTrace
+	dumpEndpointAttributes(ep, &ct)
+	if ct.PredictedTTFTMs == nil || *ct.PredictedTTFTMs != 1234.5 {
+		t.Fatalf("PredictedTTFTMs projection wrong: %v", ct.PredictedTTFTMs)
 	}
 }
 

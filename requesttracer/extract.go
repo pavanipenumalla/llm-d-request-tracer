@@ -8,6 +8,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrlatency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/latency"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
 
@@ -29,6 +30,18 @@ var extractorRegistry = map[reflect.Type]attrExtractor{
 			"totalBlocks":      p.TotalBlocks(),
 			"blockSizeTokens":  p.BlockSizeTokens(),
 			"cachedBlockCount": p.CachedBlockCount(),
+		}
+	},
+	reflect.TypeOf(&attrlatency.LatencyPredictionInfo{}): func(c fwkdl.Cloneable) any {
+		l := c.(*attrlatency.LatencyPredictionInfo)
+		return map[string]any{
+			"ttftMs":                 l.TTFT(),
+			"tpotMs":                 l.TPOT(),
+			"ttftHeadroomMs":         l.TTFTHeadroom(),
+			"tpotHeadroomMs":         l.TPOTHeadroom(),
+			"ttftValid":              l.TTFTValid(),
+			"tpotValid":              l.TPOTValid(),
+			"dispatchedRequestCount": l.DispatchedRequestCount(),
 		}
 	},
 	// InFlightLoad and UncachedRequestTokens have exported fields and marshal
@@ -97,8 +110,12 @@ func projectKnown(val fwkdl.Cloneable, ct *CandidateTrace) {
 		t := v.Tokens
 		ct.UncachedRequestTokens = &t
 	case *attrconcurrency.InFlightLoad:
-		t := v.Tokens
+		t, r := v.Tokens, v.CompletionsPerSecond
 		ct.InFlightTokens = &t
+		ct.CompletionsPerSecond = &r
+	case *attrlatency.LatencyPredictionInfo:
+		ttft := v.TTFT()
+		ct.PredictedTTFTMs = &ttft
 	case *attrprefix.PrefixCacheMatchInfo:
 		mb, tb := v.MatchBlocks(), v.TotalBlocks()
 		ct.PrefixMatchBlocks = &mb

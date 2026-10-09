@@ -16,6 +16,7 @@ import (
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrlatency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/latency"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
 
@@ -200,6 +201,7 @@ func (p *Plugin) Consumes() fwkplugin.DataDependencies {
 			attrprefix.PrefixCacheMatchInfoDataKey:       attrprefix.PrefixCacheMatchInfo{},
 			attrconcurrency.InFlightLoadDataKey:          attrconcurrency.InFlightLoad{},
 			attrconcurrency.UncachedRequestTokensDataKey: attrconcurrency.UncachedRequestTokens{},
+			attrlatency.LatencyPredictionInfoDataKey:     attrlatency.LatencyPredictionInfo{},
 		},
 	}
 }

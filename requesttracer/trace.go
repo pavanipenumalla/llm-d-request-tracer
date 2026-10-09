@@ -86,6 +86,12 @@ type CandidateTrace struct {
 	PrefixMatchBlocks     *int   `json:"prefixMatchBlocks,omitempty"`
 	PrefixTotalBlocks     *int   `json:"prefixTotalBlocks,omitempty"`
 	InFlightTokens        *int64 `json:"inFlightTokens,omitempty"`
+	// CompletionsPerSecond is the in-flight-load producer's completion rate for
+	// the pod, the divisor of the affinity filter's queue-wait term.
+	CompletionsPerSecond *float64 `json:"completionsPerSecond,omitempty"`
+	// PredictedTTFTMs is the latency predictor's TTFT for the pod, the value the
+	// affinity filter's gate reads with ttftSource: latencyPredictor.
+	PredictedTTFTMs *float64 `json:"predictedTTFTMs,omitempty"`
 }
 
 // MetricsSnapshot is the JSON-friendly projection of datalayer.Metrics.

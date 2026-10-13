@@ -110,9 +110,8 @@ func projectKnown(val fwkdl.Cloneable, ct *CandidateTrace) {
 		t := v.Tokens
 		ct.UncachedRequestTokens = &t
 	case *attrconcurrency.InFlightLoad:
-		t, r := v.Tokens, v.CompletionsPerSecond
+		t := v.Tokens
 		ct.InFlightTokens = &t
-		ct.CompletionsPerSecond = &r
 	case *attrlatency.LatencyPredictionInfo:
 		ttft := v.TTFT()
 		ct.PredictedTTFTMs = &ttft

@@ -141,8 +141,8 @@ github.com/onsi/ginkgo/v2 v2.31.0 h1:GtuJos5DFUV9EerYJo8RhYxosYNGvOdDE5haKq6Grfs
 github.com/onsi/ginkgo/v2 v2.31.0/go.mod h1:+aXOY+vzZ5mu2iI2HpTZUPmM//oQfsNFX6gU9kNcA44=
 github.com/onsi/gomega v1.42.1 h1:iN1rCUX+44NZ1Dc97MPoeFYbFR0vh8zxoxMFwKdyZ6I=
 github.com/onsi/gomega v1.42.1/go.mod h1:REff/hsDsodHoKlWsP2mAPhu1+5/6hVYNf9rIEBpeSg=
-github.com/pavanipenumalla/llm-d-router v0.0.0-20261009120306-fe9c9ebac556 h1:yemGKOTg57aNzKQGxW+u/L0Cp8XI/aFM+x4b3kkDZNw=
-github.com/pavanipenumalla/llm-d-router v0.0.0-20261009120306-fe9c9ebac556/go.mod h1:fa6l0aH5DVHXDH4x3SDiBpO5C6j5cDZwo94AYNJFDak=
+github.com/pavanipenumalla/llm-d-router v0.0.0-20261013025144-84f5d679cf18 h1:HZehuLefaXeS1SYu/VLM3TR8owrXNEsc1hCyB9OO8io=
+github.com/pavanipenumalla/llm-d-router v0.0.0-20261013025144-84f5d679cf18/go.mod h1:fa6l0aH5DVHXDH4x3SDiBpO5C6j5cDZwo94AYNJFDak=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 h1:GFCKgmp0tecUJ0sJuv4pzYCqS9+RGSn52M3FUwPs+uo=

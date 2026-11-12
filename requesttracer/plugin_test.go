@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	fwkrequest "github.com/llm-d/llm-d-router/pkg/epp/framework/common/request"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
-	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	requesthandling "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
@@ -104,17 +104,17 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	if err := p.PreRequest(context.Background(), req, resultWith("ns/pod-a", epA, epB)); err != nil {
 		t.Fatal(err)
 	}
-	p.ResponseHeader(context.Background(), req, &fwkrc.Response{
+	p.ResponseHeader(context.Background(), req, &requesthandling.Response{
 		RequestID: "req-1",
 		Headers:   map[string]string{":status": "200"},
 	}, &fwkdl.EndpointMetadata{ID: types.NamespacedName{Namespace: "ns", Name: "pod-a"}})
-	p.ResponseBody(context.Background(), req, &fwkrc.Response{RequestID: "req-1", StartOfStream: true}, nil)
-	p.ResponseBody(context.Background(), req, &fwkrc.Response{
+	p.ResponseBody(context.Background(), req, &requesthandling.Response{RequestID: "req-1", StartOfStream: true}, nil)
+	p.ResponseBody(context.Background(), req, &requesthandling.Response{
 		RequestID:   "req-1",
 		EndOfStream: true,
-		Usage: requesthandling.Usage{
+		Usage: fwkrequest.Usage{
 			PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
-			PromptTokenDetails: &requesthandling.PromptTokenDetails{CachedTokens: 7},
+			PromptTokenDetails: &fwkrequest.PromptTokenDetails{CachedTokens: 7},
 		},
 	}, nil)
 
@@ -194,10 +194,10 @@ func TestCachedTokensAbsentWhenNotReported(t *testing.T) {
 	req := &fwksched.InferenceRequest{RequestID: "req-3"}
 	_ = p.RequestHeader(context.Background(), req)
 	_ = p.PreRequest(context.Background(), req, resultWith(""))
-	p.ResponseBody(context.Background(), req, &fwkrc.Response{
+	p.ResponseBody(context.Background(), req, &requesthandling.Response{
 		RequestID:   "req-3",
 		EndOfStream: true,
-		Usage:       requesthandling.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		Usage:       fwkrequest.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
 	}, nil)
 
 	traces := sink.all()
@@ -274,10 +274,10 @@ func TestSweeperEmitsIncomplete(t *testing.T) {
 
 func TestInterfaceAssertions(t *testing.T) {
 	// Compile-time already enforces these; this makes the intent explicit.
-	var _ fwkrc.RequestHeaderProcessor = &Plugin{}
-	var _ fwkrc.PreRequest = &Plugin{}
-	var _ fwkrc.ResponseHeaderProcessor = &Plugin{}
-	var _ fwkrc.ResponseBodyProcessor = &Plugin{}
+	var _ requesthandling.RequestHeaderProcessor = &Plugin{}
+	var _ requesthandling.PreRequest = &Plugin{}
+	var _ requesthandling.ResponseHeaderProcessor = &Plugin{}
+	var _ requesthandling.ResponseBodyProcessor = &Plugin{}
 	var _ fwkplugin.Plugin = &Plugin{}
 }
 

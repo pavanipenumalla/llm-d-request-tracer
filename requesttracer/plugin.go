@@ -13,7 +13,7 @@ import (
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
-	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
+	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
 	attrlatency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/latency"
@@ -86,10 +86,10 @@ type Plugin struct {
 }
 
 var (
-	_ fwkrc.RequestHeaderProcessor  = &Plugin{}
-	_ fwkrc.PreRequest              = &Plugin{}
-	_ fwkrc.ResponseHeaderProcessor = &Plugin{}
-	_ fwkrc.ResponseBodyProcessor   = &Plugin{}
+	_ fwkrh.RequestHeaderProcessor  = &Plugin{}
+	_ fwkrh.PreRequest              = &Plugin{}
+	_ fwkrh.ResponseHeaderProcessor = &Plugin{}
+	_ fwkrh.ResponseBodyProcessor   = &Plugin{}
 	_ fwksched.Filter               = &Plugin{}
 )
 
@@ -250,7 +250,7 @@ func durationMs(start, end time.Time) float64 {
 // ResponseHeader records the response-start (headers received) time, the HTTP
 // status, and the pod that actually served the response. HeadersTime is not
 // first-token; that is captured from the first streamed body chunk.
-func (p *Plugin) ResponseHeader(_ context.Context, request *fwksched.InferenceRequest, response *fwkrc.Response, served *fwkdl.EndpointMetadata) {
+func (p *Plugin) ResponseHeader(_ context.Context, request *fwksched.InferenceRequest, response *fwkrh.Response, served *fwkdl.EndpointMetadata) {
 	if request == nil || request.RequestID == "" || response == nil {
 		return
 	}
@@ -288,7 +288,7 @@ func responseStatus(h map[string]string) string {
 
 // ResponseBody records first-token on the first StartOfStream chunk, and
 // finalizes + emits the trace on EndOfStream.
-func (p *Plugin) ResponseBody(_ context.Context, request *fwksched.InferenceRequest, response *fwkrc.Response, _ *fwkdl.EndpointMetadata) {
+func (p *Plugin) ResponseBody(_ context.Context, request *fwksched.InferenceRequest, response *fwkrh.Response, _ *fwkdl.EndpointMetadata) {
 	if request == nil || request.RequestID == "" || response == nil {
 		return
 	}

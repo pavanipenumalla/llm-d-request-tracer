@@ -23,12 +23,6 @@ import (
 // PluginType is the config `type:` string that selects this plugin.
 const PluginType = "request-tracer"
 
-// arrivalTimeKey is the request-attribute key under which the tracer stamps the
-// arrival time in RequestHeader and reads it back in PreRequest. Keeping arrival
-// on the request (rather than only in the tracer's store) makes it part of the
-// request's own attribute set and a single source of truth.
-var arrivalTimeKey = fwkplugin.NewDataKey("ArrivalTimeDataKey", PluginType)
-
 // Config is the plugin's YAML parameters.
 type Config struct {
 	// Sink selects the output: "file" (default) or "nop".
@@ -86,7 +80,6 @@ type Plugin struct {
 }
 
 var (
-	_ fwkrh.RequestHeaderProcessor  = &Plugin{}
 	_ fwkrh.PreRequest              = &Plugin{}
 	_ fwkrh.ResponseHeaderProcessor = &Plugin{}
 	_ fwkrh.ResponseBodyProcessor   = &Plugin{}
@@ -144,28 +137,6 @@ func (p *Plugin) TypedName() fwkplugin.TypedName {
 	return fwkplugin.TypedName{Type: PluginType, Name: p.name}
 }
 
-// RequestHeader starts the trace and stamps the arrival time as a request
-// attribute (read back at PreRequest). FairnessID is not read here -- it is still
-// unresolved at this point.
-func (p *Plugin) RequestHeader(_ context.Context, request *fwksched.InferenceRequest) error {
-	if request == nil || request.RequestID == "" {
-		// Without a RequestID the tracer cannot correlate hooks; every empty-ID
-		// request would collide on the same store entry. Skip rather than clobber.
-		return nil
-	}
-	now := p.now()
-	request.PutAttribute(arrivalTimeKey, now)
-	e := p.store.getOrCreate(request.RequestID, now)
-	e.with(now, func(t *RequestTrace) {
-		t.TargetModel = request.TargetModel
-		t.ArrivalTime = now
-	})
-	if p.metrics != nil {
-		p.metrics.inProgress.Inc()
-	}
-	return nil
-}
-
 // Filter records the candidate set as it enters the scheduling profile and
 // returns it unchanged. Referencing this plugin FIRST in a profile's plugin list
 // is what makes the endpoints a filter later removes visible at all: the
@@ -180,12 +151,23 @@ func (p *Plugin) Filter(_ context.Context, request *fwksched.InferenceRequest, e
 	now := p.now()
 	snap := snapshotEndpoints(endpoints)
 	e := p.store.getOrCreate(request.RequestID, now)
+	started := false
 	e.with(now, func(t *RequestTrace) {
+		// The trace starts here. ArrivalTime is replaced at end of stream by the
+		// time the EPP received the request.
+		if t.ArrivalTime.IsZero() {
+			t.TargetModel = request.TargetModel
+			t.ArrivalTime = now
+			started = true
+		}
 		// A request can run several profiles; keep the first, widest set.
 		if t.EntryCandidates == nil {
 			t.EntryCandidates = snap
 		}
 	})
+	if started && p.metrics != nil {
+		p.metrics.inProgress.Inc()
+	}
 	return endpoints
 }
 
@@ -217,9 +199,6 @@ func (p *Plugin) PreRequest(_ context.Context, request *fwksched.InferenceReques
 	now := p.now()
 	e := p.store.getOrCreate(request.RequestID, now)
 
-	// Arrival is read from the request attribute (source of truth), falling back
-	// to whatever the store holds if RequestHeader never ran for this request.
-	arrival, hasArrival := fwksched.ReadRequestAttribute[time.Time](request, arrivalTimeKey)
 	reqAttrs := dumpRequestAttributes(request)
 	candidates, winner := candidatesFrom(result)
 
@@ -229,11 +208,8 @@ func (p *Plugin) PreRequest(_ context.Context, request *fwksched.InferenceReques
 		t.WinnerPod = winner
 		t.Candidates = candidates
 		t.ReqAttributes = reqAttrs
-		if hasArrival && !arrival.IsZero() {
-			t.ArrivalTime = arrival
-		}
-		// TotalEppMs: dispatch-arrival. We own both timestamps, so this is always
-		// available and never depends on another plugin.
+		// TotalEppMs: dispatch-arrival, recomputed at end of stream with the
+		// EPP's receive time.
 		if !t.ArrivalTime.IsZero() {
 			total := durationMs(t.ArrivalTime, now)
 			t.TotalEppMs = &total
@@ -313,6 +289,15 @@ func (p *Plugin) ResponseBody(_ context.Context, request *fwksched.InferenceRequ
 	var out RequestTrace
 	e.with(now, func(t *RequestTrace) {
 		t.CompletionTime = now
+		// The request is received before any plugin runs on it; no plugin hook
+		// that sees this request's endpoint data can run that early.
+		if !response.ReceivedTimestamp.IsZero() {
+			t.ArrivalTime = response.ReceivedTimestamp
+			if !t.DispatchTime.IsZero() {
+				total := durationMs(t.ArrivalTime, t.DispatchTime)
+				t.TotalEppMs = &total
+			}
+		}
 		t.Usage = Usage{
 			PromptTokens:     response.Usage.PromptTokens,
 			CompletionTokens: response.Usage.CompletionTokens,

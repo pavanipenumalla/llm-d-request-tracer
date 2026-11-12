@@ -12,9 +12,9 @@ type RequestTrace struct {
 	RequestID   string `json:"requestID"`
 	FairnessID  string `json:"fairnessID,omitempty"`
 	TargetModel string `json:"targetModel,omitempty"`
-	// ArrivalTime is when the tracer first saw the request. Stamped as a request
-	// attribute in RequestHeader and read back from there, so it is part of the
-	// request's own attribute store (also visible in ReqAttributes).
+	// ArrivalTime is when the EPP received the request (the response's
+	// ReceivedTimestamp at end of stream), or the time of the first Filter call
+	// for a trace that never reached end of stream.
 	ArrivalTime time.Time `json:"arrivalTime"`
 	// DispatchTime is when scheduling completed and the request was sent onward.
 	DispatchTime time.Time `json:"dispatchTime,omitempty"`
@@ -128,7 +128,7 @@ type store struct {
 func newStore() *store { return &store{} }
 
 // getOrCreate returns the in-progress entry for id, creating an empty one if
-// absent. ArrivalTime is set by the caller (from the request attribute), not here.
+// absent. ArrivalTime is set by the caller, not here.
 func (s *store) getOrCreate(id string, now time.Time) *inProgress {
 	if v, ok := s.m.Load(id); ok {
 		return v.(*inProgress)

@@ -82,7 +82,7 @@ func resultWith(winner string, candidates ...fwksched.Endpoint) *fwksched.Schedu
 func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{times: []time.Time{
-		base,                             // RequestHeader (arrival)
+		base,                             // Filter (trace start)
 		base.Add(50 * time.Millisecond),  // PreRequest (dispatch)
 		base.Add(120 * time.Millisecond), // ResponseHeader (headers)
 		base.Add(130 * time.Millisecond), // ResponseBody StartOfStream (first token)
@@ -98,9 +98,7 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 
 	req := &fwksched.InferenceRequest{RequestID: "req-1", TargetModel: "m", FairnessID: "sess-1"}
 
-	if err := p.RequestHeader(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
+	p.Filter(context.Background(), req, nil)
 	if err := p.PreRequest(context.Background(), req, resultWith("ns/pod-a", epA, epB)); err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +108,9 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	}, &fwkdl.EndpointMetadata{ID: types.NamespacedName{Namespace: "ns", Name: "pod-a"}})
 	p.ResponseBody(context.Background(), req, &requesthandling.Response{RequestID: "req-1", StartOfStream: true}, nil)
 	p.ResponseBody(context.Background(), req, &requesthandling.Response{
-		RequestID:   "req-1",
-		EndOfStream: true,
+		RequestID:         "req-1",
+		EndOfStream:       true,
+		ReceivedTimestamp: base.Add(-10 * time.Millisecond),
 		Usage: fwkrequest.Usage{
 			PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
 			PromptTokenDetails: &fwkrequest.PromptTokenDetails{CachedTokens: 7},
@@ -157,16 +156,12 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	if !winnerSeen {
 		t.Fatalf("winner not flagged on pod-a")
 	}
-	// TotalEppMs is always set: dispatch(50ms) - arrival(0) = 50ms.
-	if tr.TotalEppMs == nil {
-		t.Fatalf("TotalEppMs must always be set once dispatched")
+	// Arrival is the EPP's receive time: TotalEppMs = dispatch(50ms) - received(-10ms) = 60ms.
+	if !tr.ArrivalTime.Equal(base.Add(-10 * time.Millisecond)) {
+		t.Fatalf("ArrivalTime = %v, want the response's ReceivedTimestamp", tr.ArrivalTime)
 	}
-	if *tr.TotalEppMs < 49 || *tr.TotalEppMs > 51 {
-		t.Fatalf("TotalEppMs = %v, want ~50", *tr.TotalEppMs)
-	}
-	// Arrival was stamped as a request attribute in RequestHeader.
-	if _, ok := tr.ReqAttributes[arrivalTimeKey.String()]; !ok {
-		t.Fatalf("arrival-time attribute missing from ReqAttributes")
+	if tr.TotalEppMs == nil || *tr.TotalEppMs < 59 || *tr.TotalEppMs > 61 {
+		t.Fatalf("TotalEppMs = %v, want ~60", tr.TotalEppMs)
 	}
 	if tr.Incomplete {
 		t.Fatalf("clean completion must not be Incomplete")
@@ -179,12 +174,10 @@ func TestFullLifecycleEmitsOnceOrdered(t *testing.T) {
 	}
 }
 
-// TestArrivalFromAttribute confirms arrival is stamped as a request attribute in
-// RequestHeader and read back in PreRequest to compute TotalEppMs.
 func TestCachedTokensAbsentWhenNotReported(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{times: []time.Time{
-		base,                             // RequestHeader (arrival)
+		base,                             // Filter (trace start)
 		base.Add(50 * time.Millisecond),  // PreRequest (dispatch)
 		base.Add(400 * time.Millisecond), // ResponseBody EndOfStream (completion)
 	}}
@@ -192,7 +185,7 @@ func TestCachedTokensAbsentWhenNotReported(t *testing.T) {
 	p := newTestPlugin(sink, clock.now)
 
 	req := &fwksched.InferenceRequest{RequestID: "req-3"}
-	_ = p.RequestHeader(context.Background(), req)
+	p.Filter(context.Background(), req, nil)
 	_ = p.PreRequest(context.Background(), req, resultWith(""))
 	p.ResponseBody(context.Background(), req, &requesthandling.Response{
 		RequestID:   "req-3",
@@ -210,40 +203,32 @@ func TestCachedTokensAbsentWhenNotReported(t *testing.T) {
 	}
 }
 
-func TestArrivalFromAttribute(t *testing.T) {
+// Without a ReceivedTimestamp, the trace keeps the Filter time as its arrival.
+func TestArrivalFallsBackToFilterTime(t *testing.T) {
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{times: []time.Time{
-		base,                             // RequestHeader (arrival)
+		base,                             // Filter (trace start)
 		base.Add(200 * time.Millisecond), // PreRequest (dispatch)
+		base.Add(400 * time.Millisecond), // ResponseBody EndOfStream (completion)
 	}}
 	sink := &captureSink{}
 	p := newTestPlugin(sink, clock.now)
 
 	req := &fwksched.InferenceRequest{RequestID: "req-2"}
-
-	_ = p.RequestHeader(context.Background(), req)
-
-	// Arrival must now be present on the request itself.
-	got, ok := fwksched.ReadRequestAttribute[time.Time](req, arrivalTimeKey)
-	if !ok || !got.Equal(base) {
-		t.Fatalf("arrival attribute not set on request: ok=%v got=%v", ok, got)
-	}
-
+	p.Filter(context.Background(), req, nil)
 	_ = p.PreRequest(context.Background(), req, resultWith(""))
+	p.ResponseBody(context.Background(), req, &requesthandling.Response{RequestID: "req-2", EndOfStream: true}, nil)
 
-	e := p.store.get("req-2")
-	if e == nil {
-		t.Fatal("trace missing after PreRequest")
+	traces := sink.all()
+	if len(traces) != 1 {
+		t.Fatalf("expected exactly 1 emitted trace, got %d", len(traces))
 	}
-	e.with(clock.now(), func(tr *RequestTrace) {
-		// TotalEppMs = dispatch(200ms) - arrival(0) = 200ms, always set.
-		if tr.TotalEppMs == nil || *tr.TotalEppMs < 199 || *tr.TotalEppMs > 201 {
-			t.Fatalf("TotalEppMs = %v, want ~200", tr.TotalEppMs)
-		}
-		if _, ok := tr.ReqAttributes[arrivalTimeKey.String()]; !ok {
-			t.Fatalf("ReqAttributes should contain the arrival-time key")
-		}
-	})
+	if !traces[0].ArrivalTime.Equal(base) {
+		t.Fatalf("ArrivalTime = %v, want the Filter time", traces[0].ArrivalTime)
+	}
+	if traces[0].TotalEppMs == nil || *traces[0].TotalEppMs < 199 || *traces[0].TotalEppMs > 201 {
+		t.Fatalf("TotalEppMs = %v, want ~200", traces[0].TotalEppMs)
+	}
 }
 
 func TestSweeperEmitsIncomplete(t *testing.T) {
@@ -253,7 +238,7 @@ func TestSweeperEmitsIncomplete(t *testing.T) {
 	p := newTestPlugin(sink, clock.now)
 
 	req := &fwksched.InferenceRequest{RequestID: "req-3"}
-	_ = p.RequestHeader(context.Background(), req)
+	p.Filter(context.Background(), req, nil)
 	_ = p.PreRequest(context.Background(), req, resultWith(""))
 	// never completes; advance the clock past ttl by switching the clock source.
 	p.now = func() time.Time { return base.Add(10 * time.Minute) }
@@ -274,7 +259,11 @@ func TestSweeperEmitsIncomplete(t *testing.T) {
 
 func TestInterfaceAssertions(t *testing.T) {
 	// Compile-time already enforces these; this makes the intent explicit.
-	var _ requesthandling.RequestHeaderProcessor = &Plugin{}
+	// Not a RequestHeaderProcessor: that would place the plugin in the
+	// request-header layer, ahead of the producers whose endpoint data Filter reads.
+	if _, ok := any(&Plugin{}).(requesthandling.RequestHeaderProcessor); ok {
+		t.Fatal("request-tracer must not implement RequestHeaderProcessor")
+	}
 	var _ requesthandling.PreRequest = &Plugin{}
 	var _ requesthandling.ResponseHeaderProcessor = &Plugin{}
 	var _ requesthandling.ResponseBodyProcessor = &Plugin{}
